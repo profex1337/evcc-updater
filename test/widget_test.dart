@@ -60,4 +60,20 @@ void main() {
 
     expect(find.text('Bitte Host/IP eintragen.'), findsOneWidget);
   });
+
+  testWidgets('auto-saves settings shortly after a field is edited',
+      (tester) async {
+    useTallScreen(tester);
+    final store = _FakeStore();
+    await tester.pumpWidget(MaterialApp(
+      home: UpdaterPage(store: store, updateChecker: _noUpdateChecker),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Host / IP'), '192.168.1.50');
+    await tester.pump(const Duration(seconds: 1)); // past the 800ms debounce
+
+    expect(store.saved.host, '192.168.1.50');
+  });
 }

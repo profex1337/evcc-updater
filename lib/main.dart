@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -68,7 +70,8 @@ class UpdaterPage extends StatefulWidget {
   State<UpdaterPage> createState() => _UpdaterPageState();
 }
 
-class _UpdaterPageState extends State<UpdaterPage> {
+class _UpdaterPageState extends State<UpdaterPage>
+    with WidgetsBindingObserver {
   late final SettingsStore _store = widget.store ?? SettingsStore();
   late final EvccUpdater _updater = widget.updater ?? EvccUpdater.real();
   late final UpdateChecker _updateChecker =
@@ -91,13 +94,34 @@ class _UpdaterPageState extends State<UpdaterPage> {
   bool _statusOk = true;
   ReleaseInfo? _update;
   String? _setupUrl;
+  Timer? _saveDebounce;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadSettings();
     _checkForUpdate();
   }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Persist immediately when the app leaves the foreground.
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      _saveDebounce?.cancel();
+      _persistSettings();
+    }
+  }
+
+  /// Debounced auto-save: persists ~0.8s after the last edit.
+  void _scheduleSave() {
+    _saveDebounce?.cancel();
+    _saveDebounce = Timer(const Duration(milliseconds: 800), _persistSettings);
+  }
+
+  Future<void> _persistSettings() => _store.save(_currentSettings());
 
   /// Fail-soft update check: if a newer GitHub release exists, surface a banner.
   /// Any error (no network, running under Play/F-Droid, test env) is ignored.
@@ -134,6 +158,9 @@ class _UpdaterPageState extends State<UpdaterPage> {
 
   @override
   void dispose() {
+    _saveDebounce?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    _persistSettings(); // reads controllers synchronously before they're gone
     _host.dispose();
     _port.dispose();
     _user.dispose();
@@ -152,6 +179,12 @@ class _UpdaterPageState extends State<UpdaterPage> {
       _password.text = s.password;
       _fullUpgrade = s.fullUpgrade;
     });
+    // Attach auto-save listeners AFTER the initial values are in place, so the
+    // load itself doesn't trigger a redundant save.
+    _host.addListener(_scheduleSave);
+    _port.addListener(_scheduleSave);
+    _user.addListener(_scheduleSave);
+    _password.addListener(_scheduleSave);
   }
 
   Settings _currentSettings() => Settings(
@@ -405,7 +438,12 @@ class _UpdaterPageState extends State<UpdaterPage> {
             const SizedBox(height: 8),
             SwitchListTile(
               value: _fullUpgrade,
-              onChanged: _busy ? null : (v) => setState(() => _fullUpgrade = v),
+              onChanged: _busy
+                  ? null
+                  : (v) {
+                      setState(() => _fullUpgrade = v);
+                      _scheduleSave();
+                    },
               title: const Text('Komplettes System-Upgrade'),
               subtitle: Text(_fullUpgrade
                   ? 'apt-get full-upgrade (alle Pakete)'
