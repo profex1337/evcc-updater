@@ -1,5 +1,6 @@
 import 'package:evcc_updater/main.dart';
 import 'package:evcc_updater/src/settings_store.dart';
+import 'package:evcc_updater/src/update_check.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -14,9 +15,16 @@ class _FakeStore extends SettingsStore {
   Future<void> save(Settings s) async => saved = s;
 }
 
+/// Update checker that never hits the network in tests.
+final _noUpdateChecker =
+    UpdateChecker(getJson: (_) async => <String, dynamic>{});
+
+Widget _page() =>
+    MaterialApp(home: UpdaterPage(store: _FakeStore(), updateChecker: _noUpdateChecker));
+
 void main() {
   testWidgets('renders the single-screen updater UI', (tester) async {
-    await tester.pumpWidget(MaterialApp(home: UpdaterPage(store: _FakeStore())));
+    await tester.pumpWidget(_page());
     await tester.pumpAndSettle();
 
     expect(find.text('evcc Updater'), findsOneWidget); // app bar title
@@ -31,7 +39,7 @@ void main() {
 
   testWidgets('blocks the update and warns when the host is empty',
       (tester) async {
-    await tester.pumpWidget(MaterialApp(home: UpdaterPage(store: _FakeStore())));
+    await tester.pumpWidget(_page());
     await tester.pumpAndSettle();
 
     await tester.tap(

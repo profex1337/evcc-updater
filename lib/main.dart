@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'src/evcc_updater.dart';
 import 'src/parsing.dart';
 import 'src/settings_store.dart';
 import 'src/ssh_runner.dart';
+import 'src/update_check.dart';
 
 void main() {
   runApp(const EvccUpdaterApp());
@@ -33,12 +36,18 @@ class EvccUpdaterApp extends StatelessWidget {
 }
 
 class UpdaterPage extends StatefulWidget {
-  /// [store] and [updater] are injectable so widget tests can avoid real
-  /// platform channels and real SSH.
-  const UpdaterPage({super.key, this.store, this.updater});
+  /// [store], [updater] and [updateChecker] are injectable so widget tests can
+  /// avoid real platform channels, real SSH and real network calls.
+  const UpdaterPage({
+    super.key,
+    this.store,
+    this.updater,
+    this.updateChecker,
+  });
 
   final SettingsStore? store;
   final EvccUpdater? updater;
+  final UpdateChecker? updateChecker;
 
   @override
   State<UpdaterPage> createState() => _UpdaterPageState();
@@ -47,6 +56,8 @@ class UpdaterPage extends StatefulWidget {
 class _UpdaterPageState extends State<UpdaterPage> {
   late final SettingsStore _store = widget.store ?? SettingsStore();
   late final EvccUpdater _updater = widget.updater ?? EvccUpdater.real();
+  late final UpdateChecker _updateChecker =
+      widget.updateChecker ?? UpdateChecker();
 
   final _host = TextEditingController();
   final _port = TextEditingController(text: '22');
@@ -63,11 +74,35 @@ class _UpdaterPageState extends State<UpdaterPage> {
   String? _versionAfter;
   String? _statusMessage;
   bool _statusOk = true;
+  ReleaseInfo? _update;
 
   @override
   void initState() {
     super.initState();
     _loadSettings();
+    _checkForUpdate();
+  }
+
+  /// Fail-soft update check: if a newer GitHub release exists, surface a banner.
+  /// Any error (no network, running under Play/F-Droid, test env) is ignored.
+  Future<void> _checkForUpdate() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      final release = await _updateChecker.checkForUpdate(info.version);
+      if (release != null && mounted) {
+        setState(() => _update = release);
+      }
+    } catch (_) {
+      // never let the update check disrupt the app
+    }
+  }
+
+  Future<void> _openUrl(String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if (mounted) _snack('Konnte den Download-Link nicht öffnen.');
+    }
   }
 
   @override
@@ -245,6 +280,14 @@ class _UpdaterPageState extends State<UpdaterPage> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            if (_update != null) ...[
+              _UpdateBanner(
+                release: _update!,
+                onDownload: () => _openUrl(_update!.downloadUrl),
+                onDismiss: () => setState(() => _update = null),
+              ),
+              const SizedBox(height: 8),
+            ],
             _ConnectionCard(
               host: _host,
               port: _port,
@@ -469,6 +512,48 @@ class _StatusBanner extends StatelessWidget {
               color: fg),
           const SizedBox(width: 8),
           Expanded(child: Text(message, style: TextStyle(color: fg))),
+        ],
+      ),
+    );
+  }
+}
+
+class _UpdateBanner extends StatelessWidget {
+  const _UpdateBanner({
+    required this.release,
+    required this.onDownload,
+    required this.onDismiss,
+  });
+
+  final ReleaseInfo release;
+  final VoidCallback onDownload;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
+      decoration: BoxDecoration(
+        color: scheme.tertiaryContainer,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.system_update, color: scheme.onTertiaryContainer),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Update ${release.version} verfügbar',
+              style: TextStyle(color: scheme.onTertiaryContainer),
+            ),
+          ),
+          TextButton(onPressed: onDownload, child: const Text('Laden')),
+          IconButton(
+            onPressed: onDismiss,
+            icon: Icon(Icons.close, color: scheme.onTertiaryContainer),
+            tooltip: 'Ausblenden',
+          ),
         ],
       ),
     );
