@@ -31,7 +31,7 @@ Future<void> main(List<String> args) async {
     pass = stdin.readLineSync() ?? '';
     try {
       stdin.echoMode = true;
-    } catch (_) {}
+    } catch (_) {/* echo restore is best-effort */}
     stdout.writeln();
   }
 
