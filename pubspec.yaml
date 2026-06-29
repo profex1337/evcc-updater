@@ -1,5 +1,5 @@
 name: evcc_updater
-description: "Android-App, die evcc auf einem Raspberry Pi per Knopfdruck via SSH aktualisiert."
+description: "Android-App: evcc auf einem Raspberry Pi per SSH aktualisieren/installieren (apt + Docker), Live-Status, Pi-Suche und mehrere Profile."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev

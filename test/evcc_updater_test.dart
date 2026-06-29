@@ -226,62 +226,6 @@ void main() {
     });
   });
 
-  group('EvccUpdater.testConnection', () {
-    test('reports evcc version and service state without using sudo', () async {
-      final runner = FakeSshRunner({
-        _vQuery: [_r('0.310.0\n')],
-        _svc: [_r('active\n')],
-      });
-
-      final info = await _updaterWith(runner)
-          .testConnection(config: _config, onLog: (_) {});
-
-      expect(info.version, '0.310.0');
-      expect(info.serviceActive, isTrue);
-      expect(runner.commandsRun, isNot(contains(_aptUpdate)));
-      expect(runner.commandsRun, isNot(contains(_aptUpgrade)));
-      expect(runner.stdinByCommand[_vQuery], isNull);
-      expect(runner.stdinByCommand[_svc], isNull);
-      expect(runner.closed, isTrue);
-    });
-
-    test('an inactive service is reported, not treated as an error', () async {
-      final runner = FakeSshRunner({
-        _vQuery: [_r('0.310.0\n')],
-        _svc: [_r('inactive\n')],
-      });
-
-      final info = await _updaterWith(runner)
-          .testConnection(config: _config, onLog: (_) {});
-
-      expect(info.version, '0.310.0');
-      expect(info.serviceActive, isFalse);
-    });
-
-    test('maps an auth failure to an auth error', () async {
-      final runner =
-          FakeSshRunner({}, connectError: SSHAuthFailError('no auth'));
-
-      await expectLater(
-        _updaterWith(runner).testConnection(config: _config, onLog: (_) {}),
-        throwsA(isA<EvccUpdateException>()
-            .having((e) => e.kind, 'kind', UpdateErrorKind.auth)),
-      );
-    });
-
-    test('fails clearly when evcc is not installed', () async {
-      final runner = FakeSshRunner({
-        _vQuery: [_r('', stderr: 'no packages found', exitCode: 1)],
-      });
-
-      await expectLater(
-        _updaterWith(runner).testConnection(config: _config, onLog: (_) {}),
-        throwsA(isA<EvccUpdateException>()
-            .having((e) => e.kind, 'kind', UpdateErrorKind.packageMissing)),
-      );
-    });
-  });
-
   group('EvccUpdater.install', () {
     const installCmd = 'LC_ALL=C sudo -S bash -s';
 

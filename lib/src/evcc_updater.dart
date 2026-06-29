@@ -32,14 +32,6 @@ class EvccUpdateException implements Exception {
   String toString() => 'EvccUpdateException($kind): $message';
 }
 
-/// Result of a successful connection test.
-class ConnectionInfo {
-  final String version;
-  final bool serviceActive;
-
-  const ConnectionInfo({required this.version, required this.serviceActive});
-}
-
 /// Result of a successful evcc installation.
 class InstallResult {
   final String version;
@@ -186,40 +178,6 @@ class EvccUpdater {
         );
         log(summary.message);
         return summary;
-      },
-    );
-  }
-
-  /// Quick reachability/auth check: connects, reads the evcc version and the
-  /// service state. Uses no sudo and changes nothing. Throws
-  /// [EvccUpdateException] when the host is unreachable, auth fails, or evcc is
-  /// not installed.
-  Future<ConnectionInfo> testConnection({
-    required SshConfig config,
-    required void Function(String line) onLog,
-  }) {
-    return _withConnection<ConnectionInfo>(
-      config: config,
-      onLog: onLog,
-      body: (runner, log) async {
-        log('Verbunden. Prüfe evcc …');
-
-        log('\$ $versionQuery');
-        final versionResult = await runner.run(versionQuery);
-        final version = parseInstalledVersion(versionResult.stdout);
-        if (version == null) {
-          throw const EvccUpdateException(
-            UpdateErrorKind.packageMissing,
-            'Verbindung steht, aber evcc ist auf dem Pi nicht installiert.',
-          );
-        }
-
-        log('\$ $serviceStatus');
-        final serviceResult = await runner.run(serviceStatus);
-        final active = isServiceActive(serviceResult.stdout);
-
-        log('OK: evcc $version, Dienst ${active ? 'aktiv' : 'inaktiv'}.');
-        return ConnectionInfo(version: version, serviceActive: active);
       },
     );
   }

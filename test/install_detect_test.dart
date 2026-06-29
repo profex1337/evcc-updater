@@ -2,30 +2,6 @@ import 'package:evcc_updater/src/commands.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  group('classifyInstall', () {
-    test('apt wins when dpkg reports a version', () {
-      expect(
-        classifyInstall(dpkgOutput: '0.123.1', dockerPs: 'evcc|evcc/evcc'),
-        InstallKind.apt,
-      );
-    });
-    test('docker when no apt package but an evcc container runs', () {
-      expect(
-        classifyInstall(
-          dpkgOutput: '',
-          dockerPs: 'db|postgres:16\nevcc|evcc/evcc:latest',
-        ),
-        InstallKind.docker,
-      );
-    });
-    test('unknown when neither is present', () {
-      expect(
-        classifyInstall(dpkgOutput: '   ', dockerPs: 'db|postgres:16'),
-        InstallKind.unknown,
-      );
-    });
-  });
-
   group('parseEvccDocker', () {
     test('finds the evcc container by image among others', () {
       final d = parseEvccDocker('db|postgres:16\nmy-evcc|evcc/evcc:0.123');
@@ -76,31 +52,6 @@ void main() {
     });
   });
 
-  group('parseComposeInfo', () {
-    test('parses working dir + config file + service', () {
-      final c = parseComposeInfo(
-          '/home/pi/evcc|/home/pi/evcc/docker-compose.yml|evcc');
-      expect(c, isNotNull);
-      expect(c!.workingDir, '/home/pi/evcc');
-      expect(c.configFile, '/home/pi/evcc/docker-compose.yml');
-      expect(c.service, 'evcc');
-    });
-    test('returns null for a non-compose container (<no value> labels)', () {
-      expect(parseComposeInfo('<no value>|<no value>|<no value>'), isNull);
-      expect(parseComposeInfo('||'), isNull);
-      expect(parseComposeInfo(''), isNull);
-    });
-    test('requires both working dir and service', () {
-      expect(parseComposeInfo('/home/pi/evcc|<no value>|<no value>'), isNull);
-    });
-    test('rejects a tampered service name or a non-absolute working dir', () {
-      // A service containing shell metacharacters is refused outright.
-      expect(parseComposeInfo('/home/pi/evcc|x|evcc;reboot'), isNull);
-      expect(parseComposeInfo("/home/pi/evcc|x|ev'cc"), isNull);
-      // Working dir must be an absolute path.
-      expect(parseComposeInfo('home/pi/evcc|x|evcc'), isNull);
-    });
-  });
 
   group('dockerComposeUpdateScript', () {
     test('pulls then recreates only the evcc service in the project dir', () {
@@ -190,6 +141,22 @@ void main() {
       expect(composeInfoFromInspect({'Config': {'Labels': {}}}), isNull);
       expect(composeInfoFromInspect({'Config': {}}), isNull);
       expect(composeInfoFromInspect({}), isNull);
+    });
+    test('rejects a tampered service name or a non-absolute working dir', () {
+      Map<String, dynamic> labels(String wd, String svc) => {
+            'Config': {
+              'Labels': {
+                'com.docker.compose.project.working_dir': wd,
+                'com.docker.compose.service': svc,
+              }
+            }
+          };
+      // Service must match compose's charset; working dir must be absolute.
+      expect(composeInfoFromInspect(labels('/home/pi/evcc', 'evcc;reboot')),
+          isNull);
+      expect(
+          composeInfoFromInspect(labels('/home/pi/evcc', "ev'cc")), isNull);
+      expect(composeInfoFromInspect(labels('home/pi/evcc', 'evcc')), isNull);
     });
   });
 

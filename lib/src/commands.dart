@@ -67,18 +67,6 @@ class DockerComposeInfo {
   });
 }
 
-/// Decides how evcc is installed from a `dpkg-query` result and a `docker ps`
-/// listing. apt takes precedence (it's the supported install); a running evcc
-/// container is the Docker case; otherwise unknown.
-InstallKind classifyInstall({
-  required String dpkgOutput,
-  required String dockerPs,
-}) {
-  if (dpkgOutput.trim().isNotEmpty) return InstallKind.apt;
-  if (parseEvccDocker(dockerPs) != null) return InstallKind.docker;
-  return InstallKind.unknown;
-}
-
 /// Wraps [s] in single quotes, safely escaping any embedded single quote so the
 /// value cannot break out of the quoting in a shell command (`'\''` idiom).
 String shSingleQuote(String s) => "'${s.replaceAll("'", r"'\''")}'";
@@ -126,18 +114,6 @@ String dockerInspectJsonCommand(String container) =>
 String dockerInspectJsonSudoCommand(String container) =>
     'LC_ALL=C sudo -S ${dockerInspectJsonCommand(container)}';
 
-/// `docker inspect --format` that prints `workingDir|configFile|service` from
-/// the compose labels. Retained for the string-based parser/tests.
-String dockerInspectCommand(String container) =>
-    'docker inspect ${shSingleQuote(container)} --format '
-    '\'{{ index .Config.Labels "com.docker.compose.project.working_dir"}}|'
-    '{{ index .Config.Labels "com.docker.compose.project.config_files"}}|'
-    '{{ index .Config.Labels "com.docker.compose.service"}}\'';
-
-/// sudo variant of [dockerInspectCommand].
-String dockerInspectSudoCommand(String container) =>
-    'sudo -S ${dockerInspectCommand(container)}';
-
 /// Decodes `docker inspect` output (a JSON array, or a bare object) and returns
 /// the first container object, or null on empty/garbage.
 Map<String, dynamic>? firstInspectObject(String json) {
@@ -175,28 +151,6 @@ DockerComposeInfo? _composeInfo({
     configFile: configFile,
     service: service,
     project: project,
-  );
-}
-
-/// Parses the `workingDir|configFile|service` line from [dockerInspectCommand]
-/// (the templated form). Returns null unless it's really compose-managed.
-DockerComposeInfo? parseComposeInfo(String inspectOutput) {
-  final line = inspectOutput
-      .split('\n')
-      .map((l) => l.trim())
-      .firstWhere((l) => l.isNotEmpty, orElse: () => '');
-  if (line.isEmpty) return null;
-  final parts = line.split('|');
-  String at(int i) {
-    if (i >= parts.length) return '';
-    final v = parts[i].trim();
-    return v == '<no value>' ? '' : v;
-  }
-
-  return _composeInfo(
-    workingDir: at(0),
-    configFile: at(1),
-    service: at(2),
   );
 }
 
