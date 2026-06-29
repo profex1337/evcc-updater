@@ -26,6 +26,8 @@ final _nothingToUpgrade =
 /// Note: for a full-upgrade this reflects the WHOLE system, not just evcc.
 bool isAlreadyNewest(String aptOutput) {
   final out = aptOutput.toLowerCase();
+  // A held-back package means an upgrade exists but is blocked — not "current".
+  if (out.contains('kept back')) return false;
   return out.contains('is already the newest version') ||
       _nothingToUpgrade.hasMatch(out);
 }
@@ -92,7 +94,7 @@ UpdateSummary summarize({
             : UpdateStatus.dryRunWouldUpdate,
         message: alreadyNewest
             ? 'Probelauf: System ist komplett aktuell (evcc $before).'
-            : 'Probelauf: System-Updates verfügbar (evcc aktuell: $before).',
+            : 'Probelauf: System-Updates verfügbar (evcc installiert: $before).',
         before: before,
         after: after,
       );

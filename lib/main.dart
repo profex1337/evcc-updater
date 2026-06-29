@@ -190,6 +190,10 @@ class _UpdaterPageState extends State<UpdaterPage>
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
       if (_lockEnabled && !_unlocking && mounted) {
+        // Dismiss any open sheet/dialog (API status, history, settings, find-Pi)
+        // so it can't stay readable above the lock screen on resume.
+        Navigator.of(context, rootNavigator: true)
+            .popUntil((r) => r.isFirst);
         setState(() => _locked = true);
       }
     } else if (state == AppLifecycleState.resumed && _locked && !_unlocking) {
@@ -516,6 +520,7 @@ class _UpdaterPageState extends State<UpdaterPage>
   }
 
   Future<void> _testConnection() async {
+    if (_busy) return;
     final config = _prepare();
     if (config == null) return;
     _lastAction = _testConnection;
@@ -549,6 +554,7 @@ class _UpdaterPageState extends State<UpdaterPage>
   }
 
   Future<void> _install() async {
+    if (_busy) return;
     if (!await _confirm(
       'evcc installieren?',
       'Installiert evcc auf ${_host.text.trim()}: fügt das offizielle '
@@ -580,6 +586,7 @@ class _UpdaterPageState extends State<UpdaterPage>
   }
 
   Future<void> _restartService() async {
+    if (_busy) return;
     final config = _prepare();
     if (config == null) return;
     _lastAction = _restartService;
@@ -595,6 +602,7 @@ class _UpdaterPageState extends State<UpdaterPage>
   }
 
   Future<void> _reboot() async {
+    if (_busy) return;
     if (!await _confirm(
       'Pi neustarten?',
       'Startet den Raspberry Pi neu. Die Verbindung bricht dabei kurz ab.',
@@ -616,6 +624,7 @@ class _UpdaterPageState extends State<UpdaterPage>
   }
 
   Future<void> _showStatus() async {
+    if (_busy) return;
     final config = _prepare();
     if (config == null) return;
     _lastAction = _showStatus;
@@ -631,10 +640,21 @@ class _UpdaterPageState extends State<UpdaterPage>
 
   /// Re-trust a changed host key, then retry the action that hit it.
   Future<void> _trustAndRetry() async {
+    if (_busy) return; // synchronous re-entrancy guard: forgetHostKey is async
     final config = _lastConfig;
     final action = _lastAction;
     if (config == null || action == null) return;
-    await _updater.forgetHostKey(config);
+    setState(() => _busy = true);
+    try {
+      await _updater.forgetHostKey(config);
+    } catch (_) {
+      // proceed to retry regardless — forgetting is best-effort
+    }
+    if (!mounted) return;
+    // Hand control to the original action, which re-enters the normal
+    // busy/_guard lifecycle (it sets _busy synchronously before its first await,
+    // so there is no concurrency gap here).
+    setState(() => _busy = false);
     await action();
   }
 
@@ -724,7 +744,7 @@ class _UpdaterPageState extends State<UpdaterPage>
   /// Silent read-only status check on launch (opt-in). Pre-fills the version
   /// badge + status without entering the busy state or clearing the log.
   Future<void> _autoStatus() async {
-    if (!_autoCheck || _host.text.trim().isEmpty) return;
+    if (_busy || !_autoCheck || _host.text.trim().isEmpty) return;
     final port = int.tryParse(_port.text.trim());
     if (port == null) return;
     if (_authMode == AuthMode.password && _password.text.isEmpty) return;
@@ -737,7 +757,8 @@ class _UpdaterPageState extends State<UpdaterPage>
         onLog: (_) {},
         allowSudoForDocker: false,
       );
-      if (!mounted) return;
+      // Don't clobber the banner if the user kicked off a real action meanwhile.
+      if (!mounted || _busy) return;
       setState(() {
         switch (d.kind) {
           case InstallKind.apt:

@@ -48,6 +48,13 @@ void main() {
       expect(d!.name, 'evcc');
       expect(d.image, 'evcc/evcc:latest');
     });
+
+    test('does not mistake a lone sibling (evcc-db) for the evcc install', () {
+      // Only a sibling running, image has no "evcc", name only contains it as a
+      // prefix — must NOT be picked (avoids recreating the wrong container).
+      expect(parseEvccDocker('evcc-db|postgres:16'), isNull);
+      expect(parseEvccDocker('evcc-grafana|grafana/grafana'), isNull);
+    });
   });
 
   group('isDockerPermissionError', () {

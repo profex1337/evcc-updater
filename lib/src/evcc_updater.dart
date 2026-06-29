@@ -412,6 +412,14 @@ class EvccUpdater {
               ((obj['Config'] is Map) ? (obj['Config'] as Map)['Image'] : null)
                       ?.toString() ??
                   container.image;
+          if (image.contains('@sha256:')) {
+            throw const EvccUpdateException(
+              UpdateErrorKind.unknown,
+              'Das Image ist per Digest gepinnt (@sha256:…) und kann nicht '
+              'automatisch aktualisiert werden – bitte in der Container-'
+              'Definition ein Image-Tag setzen und manuell neu ziehen.',
+            );
+          }
           script = dockerRunRecreateScript(
             name: container.name,
             image: image,
@@ -495,6 +503,15 @@ class EvccUpdater {
           throw const EvccUpdateException(
             UpdateErrorKind.sudo,
             'sudo hat das Passwort abgelehnt – stimmt das Pi-Passwort?',
+          );
+        }
+        // A non-zero restart command (e.g. an undetected sudo rejection) must
+        // not be swallowed — otherwise the old instance keeps running and
+        // is-active still reports 'active', a false "Dienst läuft wieder".
+        if (result.exitCode != null && result.exitCode != 0) {
+          throw EvccUpdateException(
+            UpdateErrorKind.unknown,
+            'Neustart fehlgeschlagen (Exit ${result.exitCode}). Details im Log.',
           );
         }
         final svc = await runner.run(serviceStatus);

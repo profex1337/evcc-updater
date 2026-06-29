@@ -115,20 +115,43 @@ class Dartssh2Runner implements SshRunner {
     final stdoutBuf = StringBuffer();
     final stderrBuf = StringBuffer();
 
+    // Line-buffer the live [onOutput] callback: emit only whole lines so a
+    // consumer that redacts per call (the updater masks the sudo password) can
+    // never be defeated by a value split across two network chunks — a secret
+    // would have to straddle a newline, which it cannot. The full raw output is
+    // still captured verbatim in the buffers for the returned result.
+    var outPartial = '';
+    var errPartial = '';
+    void emit(bool isErr, String chunk) {
+      if (onOutput == null) return;
+      var buf = (isErr ? errPartial : outPartial) + chunk;
+      var nl = buf.indexOf('\n');
+      while (nl != -1) {
+        onOutput(buf.substring(0, nl + 1));
+        buf = buf.substring(nl + 1);
+        nl = buf.indexOf('\n');
+      }
+      if (isErr) {
+        errPartial = buf;
+      } else {
+        outPartial = buf;
+      }
+    }
+
     // Drain both streams to completion. asFuture() resolves on the stream's
     // onDone, which dartssh2 fires only after all channel data is delivered —
     // so no trailing chunk (e.g. a short version string) can be lost. Awaiting
     // the streams (rather than session.done + cancel) is what guarantees this.
-    final outDone = session.stdout.listen((data) {
+    final outSub = session.stdout.listen((data) {
       final s = utf8.decode(data, allowMalformed: true);
       stdoutBuf.write(s);
-      onOutput?.call(s);
-    }).asFuture<void>();
-    final errDone = session.stderr.listen((data) {
+      emit(false, s);
+    });
+    final errSub = session.stderr.listen((data) {
       final s = utf8.decode(data, allowMalformed: true);
       stderrBuf.write(s);
-      onOutput?.call(s);
-    }).asFuture<void>();
+      emit(true, s);
+    });
 
     if (stdin != null) {
       session.stdin.add(Uint8List.fromList(utf8.encode(stdin)));
@@ -136,10 +159,21 @@ class Dartssh2Runner implements SshRunner {
     await session.stdin.close();
 
     try {
-      await Future.wait([outDone, errDone]).timeout(config.commandTimeout);
+      await Future.wait([outSub.asFuture<void>(), errSub.asFuture<void>()])
+          .timeout(config.commandTimeout);
     } on TimeoutException {
+      // Deterministic cleanup: cancel the subscriptions, don't rely on close()
+      // tearing the streams down promptly.
+      await outSub.cancel();
+      await errSub.cancel();
       session.close();
       rethrow;
+    }
+
+    // Flush any trailing partial line (output without a final newline).
+    if (onOutput != null) {
+      if (outPartial.isNotEmpty) onOutput(outPartial);
+      if (errPartial.isNotEmpty) onOutput(errPartial);
     }
 
     return CommandResult(

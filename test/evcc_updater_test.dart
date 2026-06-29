@@ -10,9 +10,10 @@ import 'package:flutter_test/flutter_test.dart';
 
 // Exact command strings the updater is expected to run (see commands.dart).
 const _vQuery = r"dpkg-query -W -f='${Version}' evcc";
-const _aptUpdate = 'sudo -S apt-get update -qq';
-const _aptUpgrade = 'sudo -S apt-get install --only-upgrade -y evcc';
-const _aptDryRun = 'sudo -S apt-get install --only-upgrade --dry-run evcc';
+const _aptUpdate = 'LC_ALL=C sudo -S apt-get update -qq';
+const _aptUpgrade = 'LC_ALL=C sudo -S apt-get install --only-upgrade -y evcc';
+const _aptDryRun =
+    'LC_ALL=C sudo -S apt-get install --only-upgrade --dry-run evcc';
 const _svc = 'systemctl is-active evcc';
 
 const _config = SshConfig(
@@ -135,7 +136,7 @@ void main() {
 
     test('full system upgrade: evcc unchanged, system packages upgraded',
         () async {
-      const fullCmd = 'sudo -S apt-get full-upgrade -y';
+      const fullCmd = 'LC_ALL=C sudo -S apt-get full-upgrade -y';
       final runner = FakeSshRunner({
         _vQuery: [_r('0.310.0\n'), _r('0.310.0\n')],
         _aptUpdate: [_r('')],
@@ -282,7 +283,7 @@ void main() {
   });
 
   group('EvccUpdater.install', () {
-    const installCmd = 'sudo -S bash -s';
+    const installCmd = 'LC_ALL=C sudo -S bash -s';
 
     test('runs the install script as root, then verifies version + service',
         () async {
@@ -631,7 +632,7 @@ void main() {
     final jsonCmd = dockerInspectJsonCommand('evcc');
     final jsonSudoCmd = dockerInspectJsonSudoCommand('evcc');
     const shell = 'bash -s';
-    const sudoShell = 'sudo -S bash -s';
+    const sudoShell = 'LC_ALL=C sudo -S bash -s';
 
     String composeInspect() => jsonEncode([
           {
@@ -704,6 +705,26 @@ void main() {
       expect(stdin, contains("docker rename 'evcc' 'evcc-evccpitool-old'"));
       expect(stdin, contains("docker run -d --name 'evcc'"));
       expect(stdin, contains("-v '/home/pi/evcc.yaml:/etc/evcc.yaml'"));
+    });
+
+    test('a digest-pinned image is reported as not auto-updatable', () async {
+      final digestInspect = jsonEncode([
+        {
+          'Name': '/evcc',
+          'Config': {
+            'Image': 'evcc/evcc@sha256:deadbeef',
+            'Labels': <String, dynamic>{}
+          },
+          'HostConfig': {'NetworkMode': 'default'},
+        }
+      ]);
+      final runner = FakeSshRunner({jsonCmd: [_r(digestInspect)]});
+      await expectLater(
+        _updaterWith(runner).updateDocker(
+            config: _config, detection: detection, onLog: (_) {}),
+        throwsA(isA<EvccUpdateException>()
+            .having((e) => e.message, 'm', contains('Digest'))),
+      );
     });
 
     test('sudo branch feeds the password as the first stdin line only',

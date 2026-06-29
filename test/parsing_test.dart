@@ -46,6 +46,12 @@ void main() {
         isFalse,
       );
     });
+
+    test('a kept-back evcc upgrade is NOT reported as already newest', () {
+      const out = 'The following packages have been kept back:\n  evcc\n'
+          '0 upgraded, 0 newly installed, 0 to remove and 1 not upgraded.';
+      expect(isAlreadyNewest(out), isFalse);
+    });
   });
 
   group('isServiceActive', () {
@@ -143,6 +149,20 @@ void main() {
           alreadyNewest: false);
       expect(r.status, UpdateStatus.dryRunWouldUpdate);
       expect(r.message, contains('System'));
+    });
+
+    test('dry-run full-upgrade does not falsely claim evcc itself is current',
+        () {
+      final r = summarize(
+          before: '0.310.0',
+          after: '0.310.0',
+          dryRun: true,
+          fullUpgrade: true,
+          alreadyNewest: false);
+      // The whole-system summary carries no per-package info about evcc, so it
+      // must not assert "evcc aktuell".
+      expect(r.message, contains('installiert'));
+      expect(r.message, isNot(contains('aktuell')));
     });
 
     test('dry-run with everything current reports the system fully up to date',

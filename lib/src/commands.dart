@@ -40,7 +40,7 @@ const String dockerListCommand = "docker ps --format '{{.Names}}|{{.Image}}'";
 
 /// Same, but via sudo for hosts where the user isn't in the `docker` group.
 const String dockerListSudoCommand =
-    "sudo -S docker ps --format '{{.Names}}|{{.Image}}'";
+    "LC_ALL=C sudo -S docker ps --format '{{.Names}}|{{.Image}}'";
 
 /// A running evcc Docker container (its name + image).
 class EvccDocker {
@@ -99,8 +99,11 @@ EvccDocker? parseEvccDocker(String dockerPs) {
   for (final e in entries) {
     if (e.image.toLowerCase().contains('evcc')) return e;
   }
+  // Name fallback only on an EXACT match (a `--name evcc` container with a
+  // non-evcc image) — a substring match would wrongly pick siblings like
+  // `evcc-db` / `evcc-grafana`.
   for (final e in entries) {
-    if (e.name.toLowerCase().contains('evcc')) return e;
+    if (e.name.toLowerCase() == 'evcc') return e;
   }
   return null;
 }
@@ -121,7 +124,7 @@ String dockerInspectJsonCommand(String container) =>
 
 /// sudo variant of [dockerInspectJsonCommand].
 String dockerInspectJsonSudoCommand(String container) =>
-    'sudo -S ${dockerInspectJsonCommand(container)}';
+    'LC_ALL=C sudo -S ${dockerInspectJsonCommand(container)}';
 
 /// `docker inspect --format` that prints `workingDir|configFile|service` from
 /// the compose labels. Retained for the string-based parser/tests.
@@ -424,10 +427,11 @@ sleep 3
 const String serviceStatus = 'systemctl is-active evcc';
 
 /// Restarts the evcc service (needs sudo).
-const String serviceRestartCommand = 'sudo -S systemctl restart evcc';
+const String serviceRestartCommand =
+    'LC_ALL=C sudo -S systemctl restart evcc';
 
 /// Reboots the Pi (needs sudo). The SSH connection drops as a result.
-const String rebootCommand = 'sudo -S reboot';
+const String rebootCommand = 'LC_ALL=C sudo -S reboot';
 
 /// evcc service status incl. the last log lines (no sudo needed).
 const String statusCommand = 'systemctl status evcc --no-pager';
@@ -448,7 +452,7 @@ List<SshStep> buildUpdateSteps({
     ),
     const SshStep(
       label: 'Paketliste aktualisieren',
-      command: 'sudo -S apt-get update -qq',
+      command: 'LC_ALL=C sudo -S apt-get update -qq',
       needsSudoPassword: true,
     ),
     SshStep(
@@ -474,7 +478,7 @@ List<SshStep> buildUpdateSteps({
 /// The caller feeds `<password>\n<script>` to stdin — `sudo -S` consumes the
 /// first line as the password, then `bash -s` executes the rest as root. This
 /// keeps the password out of the command line entirely.
-const String installShellCommand = 'sudo -S bash -s';
+const String installShellCommand = 'LC_ALL=C sudo -S bash -s';
 
 /// The root install script: official evcc apt-repo setup + package install +
 /// service enable. Mirrors https://docs.evcc.io/en/installation/linux.
@@ -486,10 +490,12 @@ String buildInstallScript({String channel = 'stable'}) {
   return '''
 set -e
 export DEBIAN_FRONTEND=noninteractive
+export LC_ALL=C
 apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl
-curl -1sLf 'https://dl.evcc.io/public/evcc/$repo/setup.deb.sh' -o /tmp/evcc-setup.sh
-bash /tmp/evcc-setup.sh
-rm -f /tmp/evcc-setup.sh
+setup=\$(mktemp)
+curl -1sLf 'https://dl.evcc.io/public/evcc/$repo/setup.deb.sh' -o "\$setup"
+bash "\$setup"
+rm -f "\$setup"
 apt-get update
 apt-get install -y evcc
 systemctl enable --now evcc
@@ -499,10 +505,10 @@ systemctl enable --now evcc
 String _upgradeCommand({required bool fullUpgrade, required bool dryRun}) {
   if (fullUpgrade) {
     return dryRun
-        ? 'sudo -S apt-get full-upgrade --dry-run'
-        : 'sudo -S apt-get full-upgrade -y';
+        ? 'LC_ALL=C sudo -S apt-get full-upgrade --dry-run'
+        : 'LC_ALL=C sudo -S apt-get full-upgrade -y';
   }
   return dryRun
-      ? 'sudo -S apt-get install --only-upgrade --dry-run evcc'
-      : 'sudo -S apt-get install --only-upgrade -y evcc';
+      ? 'LC_ALL=C sudo -S apt-get install --only-upgrade --dry-run evcc'
+      : 'LC_ALL=C sudo -S apt-get install --only-upgrade -y evcc';
 }
