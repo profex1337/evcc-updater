@@ -17,9 +17,11 @@ void main() {
         themeMode: 'dark',
         channel: 'unstable',
         autoCheck: true,
+        backupBeforeUpdate: false,
       );
 
       final back = parseAppConfig(encodeAppConfig(cfg));
+      expect(back.backupBeforeUpdate, isFalse);
       expect(back.profiles.length, 2);
       expect(back.profiles[0].name, 'Zuhause');
       expect(back.profiles[0].authMode, AuthMode.key);
@@ -39,6 +41,11 @@ void main() {
       expect(parseAppConfig('').profiles.single.name, 'Standard');
       expect(parseAppConfig('not json').profiles.single.name, 'Standard');
       expect(parseAppConfig('[]').profiles.single.name, 'Standard');
+    });
+
+    test('backupBeforeUpdate defaults ON when the key is absent', () {
+      expect(parseAppConfig('{"profiles":[],"activeIndex":0}').backupBeforeUpdate,
+          isTrue);
     });
 
     test('safeIndex/active clamp an out-of-range index', () {

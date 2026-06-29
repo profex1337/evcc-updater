@@ -492,6 +492,58 @@ void main() {
     });
   });
 
+  group('EvccUpdater.backup', () {
+    final backupCmd = installShellCommand;
+
+    test('returns the archive path; password only via stdin', () async {
+      final runner = FakeSshRunner({
+        backupCmd: [
+          _r('EVCC_BACKUP_OK /var/backups/evcc/evcc-backup-x.tar.gz',
+              exitCode: 0)
+        ],
+      });
+
+      final path =
+          await _updaterWith(runner).backup(config: _config, onLog: (_) {});
+
+      expect(path, '/var/backups/evcc/evcc-backup-x.tar.gz');
+      expect(runner.stdinByCommand[backupCmd], startsWith('sekret\n'));
+      expect(runner.commandsRun.any((c) => c.contains('sekret')), isFalse);
+    });
+
+    test('returns null when there is nothing to back up (not an error)',
+        () async {
+      final runner =
+          FakeSshRunner({backupCmd: [_r('EVCC_BACKUP_EMPTY', exitCode: 0)]});
+      expect(
+        await _updaterWith(runner).backup(config: _config, onLog: (_) {}),
+        isNull,
+      );
+    });
+
+    test('throws on a rejected sudo password', () async {
+      final runner = FakeSshRunner({
+        backupCmd: [
+          _r('', stderr: 'sudo: 1 incorrect password attempt', exitCode: 1)
+        ],
+      });
+      await expectLater(
+        _updaterWith(runner).backup(config: _config, onLog: (_) {}),
+        throwsA(isA<EvccUpdateException>()
+            .having((e) => e.kind, 'kind', UpdateErrorKind.sudo)),
+      );
+    });
+
+    test('throws when the backup script fails', () async {
+      final runner =
+          FakeSshRunner({backupCmd: [_r('EVCC_BACKUP_FAIL', exitCode: 1)]});
+      await expectLater(
+        _updaterWith(runner).backup(config: _config, onLog: (_) {}),
+        throwsA(isA<EvccUpdateException>()),
+      );
+    });
+  });
+
   group('EvccUpdater.detectInstall', () {
     test('apt: a dpkg version means an apt install + service state', () async {
       final runner = FakeSshRunner({

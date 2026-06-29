@@ -19,6 +19,9 @@ Releases**.
 - **evcc aktualisieren** per Knopfdruck — erkennt automatisch, ob evcc als
   **apt-Paket** oder im **Docker-Container** läuft, und nimmt den passenden Weg.
 - **Probelauf** (`--dry-run`) — zeigt gefahrlos, ob ein Update verfügbar ist.
+- **Backup vor Update** — sichert vor einem apt-Update automatisch `evcc.yaml` +
+  die Datenbank als zeitgestempeltes Archiv auf dem Pi (abschaltbar); schlägt es
+  fehl, wird der Fehler angezeigt und das Update gestoppt.
 - **Verbindung testen** — Host/Zugang in Sekunden prüfen, ohne etwas zu ändern.
 - **evcc installieren** auf einem frischen Pi (offizielles apt-Repo).
 - **evcc-Status (Live)** — liest die aktuellen Werte direkt aus der evcc-Web-API

@@ -146,6 +146,7 @@ class _UpdaterPageState extends State<UpdaterPage>
   String _themeMode = 'system';
   String _channel = 'stable';
   bool _autoCheck = false;
+  bool _backupBeforeUpdate = true;
   List<Profile> _profiles = [const Profile(name: 'Standard')]; // growable
   int _activeIndex = 0;
 
@@ -222,6 +223,7 @@ class _UpdaterPageState extends State<UpdaterPage>
       _themeMode = cfg.themeMode;
       _channel = cfg.channel;
       _autoCheck = cfg.autoCheck;
+      _backupBeforeUpdate = cfg.backupBeforeUpdate;
       _applyProfile(cfg.active);
       if (_lockEnabled) _locked = true;
     });
@@ -286,6 +288,7 @@ class _UpdaterPageState extends State<UpdaterPage>
       themeMode: _themeMode,
       channel: _channel,
       autoCheck: _autoCheck,
+      backupBeforeUpdate: _backupBeforeUpdate,
     );
   }
 
@@ -534,6 +537,14 @@ class _UpdaterPageState extends State<UpdaterPage>
           });
           _addHistory('evcc-Docker-Container aktualisiert.');
         case InstallKind.apt:
+          // Back up config + DB first (opt-out). A backup failure throws here
+          // and is surfaced by _guard — the update does NOT proceed, so you're
+          // never updated without the safety net you enabled. ("Nichts zu
+          // sichern" returns null and is not an error.)
+          if (!dryRun && _backupBeforeUpdate) {
+            await _updater.backup(config: config, onLog: _appendLog);
+            if (!mounted) return;
+          }
           final summary = await _updater.run(
             config: config,
             fullUpgrade: _fullUpgrade,
@@ -980,6 +991,18 @@ class _UpdaterPageState extends State<UpdaterPage>
                   value: _autoCheck,
                   onChanged: (v) {
                     setState(() => _autoCheck = v);
+                    setSheet(() {});
+                    _scheduleSave();
+                  },
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Vor Update Backup anlegen'),
+                  subtitle: const Text(
+                      'Sichert evcc.yaml + Datenbank auf dem Pi (apt-Update)'),
+                  value: _backupBeforeUpdate,
+                  onChanged: (v) {
+                    setState(() => _backupBeforeUpdate = v);
                     setSheet(() {});
                     _scheduleSave();
                   },

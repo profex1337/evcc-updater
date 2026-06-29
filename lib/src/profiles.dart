@@ -78,6 +78,9 @@ class AppConfig {
   final String channel;
   final bool autoCheck;
 
+  /// Snapshot evcc config + DB on the Pi before each update.
+  final bool backupBeforeUpdate;
+
   const AppConfig({
     required this.profiles,
     required this.activeIndex,
@@ -87,6 +90,7 @@ class AppConfig {
     this.themeMode = 'system',
     this.channel = 'stable',
     this.autoCheck = false,
+    this.backupBeforeUpdate = true,
   });
 
   static const initial =
@@ -107,6 +111,7 @@ class AppConfig {
     String? themeMode,
     String? channel,
     bool? autoCheck,
+    bool? backupBeforeUpdate,
   }) =>
       AppConfig(
         profiles: profiles ?? this.profiles,
@@ -117,6 +122,7 @@ class AppConfig {
         themeMode: themeMode ?? this.themeMode,
         channel: channel ?? this.channel,
         autoCheck: autoCheck ?? this.autoCheck,
+        backupBeforeUpdate: backupBeforeUpdate ?? this.backupBeforeUpdate,
       );
 
   Map<String, dynamic> toJson() => {
@@ -128,6 +134,7 @@ class AppConfig {
         'themeMode': themeMode,
         'channel': channel,
         'autoCheck': autoCheck,
+        'backupBeforeUpdate': backupBeforeUpdate,
       };
 
   static AppConfig fromJson(Map<String, dynamic> j) {
@@ -147,6 +154,8 @@ class AppConfig {
       themeMode: (j['themeMode'] ?? 'system').toString(),
       channel: (j['channel'] ?? 'stable').toString(),
       autoCheck: j['autoCheck'] == true,
+      // Default ON; only an explicit false disables it.
+      backupBeforeUpdate: j['backupBeforeUpdate'] != false,
     );
   }
 }

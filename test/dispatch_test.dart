@@ -36,7 +36,19 @@ class FakeEvccUpdater extends EvccUpdater {
   int runCalls = 0;
   int dockerCalls = 0;
   int forgetCalls = 0;
+  int backupCalls = 0;
+  Object? backupError;
   SshConfig? forgotConfig;
+
+  @override
+  Future<String?> backup({
+    required SshConfig config,
+    required void Function(String line) onLog,
+  }) async {
+    backupCalls++;
+    if (backupError != null) throw backupError!;
+    return '/var/backups/evcc/evcc-backup-test.tar.gz';
+  }
 
   @override
   Future<InstallDetection> detectInstall({
@@ -112,8 +124,27 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, 'evcc aktualisieren'));
     await tester.pumpAndSettle();
 
+    expect(updater.backupCalls, 1); // backup runs first (toggle on by default)
     expect(updater.runCalls, 1);
     expect(find.text('evcc 0.310.0 → 0.311.0 aktualisiert.'), findsOneWidget);
+  });
+
+  testWidgets('a failed backup is shown and the update does NOT run',
+      (tester) async {
+    useTallScreen(tester);
+    final updater = FakeEvccUpdater()
+      ..backupError = const EvccUpdateException(
+          UpdateErrorKind.unknown, 'Backup fehlgeschlagen (Exit 1).');
+    await tester.pumpWidget(page(updater));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(FilledButton, 'evcc aktualisieren'));
+    await tester.pumpAndSettle();
+
+    expect(updater.backupCalls, 1);
+    expect(updater.runCalls, 0); // halted — never updated without a backup
+    // Shown in the status banner (and the live log).
+    expect(find.textContaining('Backup fehlgeschlagen'), findsWidgets);
   });
 
   testWidgets('docker install: update button recreates the container',

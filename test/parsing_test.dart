@@ -75,6 +75,20 @@ void main() {
     });
   });
 
+  group('parseBackupPath', () {
+    test('extracts the path after the OK marker', () {
+      const out = 'Erstelle Backup …\n'
+          'EVCC_BACKUP_OK /var/backups/evcc/evcc-backup-20260629-120000.tar.gz\n';
+      expect(parseBackupPath(out),
+          '/var/backups/evcc/evcc-backup-20260629-120000.tar.gz');
+    });
+    test('null when nothing was backed up or no marker present', () {
+      expect(parseBackupPath('EVCC_BACKUP_EMPTY'), isNull);
+      expect(parseBackupPath('some unrelated output'), isNull);
+      expect(parseBackupPath(''), isNull);
+    });
+  });
+
   group('redactPassword', () {
     test('replaces every occurrence with a fixed-length mask', () {
       expect(

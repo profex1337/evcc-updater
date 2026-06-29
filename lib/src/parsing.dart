@@ -32,6 +32,20 @@ bool isAlreadyNewest(String aptOutput) {
       _nothingToUpgrade.hasMatch(out);
 }
 
+/// Extracts the backup archive path from the backup script's success marker
+/// (`EVCC_BACKUP_OK ...`), or null when no backup was written.
+String? parseBackupPath(String output) {
+  const marker = 'EVCC_BACKUP_OK ';
+  for (final line in output.split('\n')) {
+    final t = line.trim();
+    if (t.startsWith(marker)) {
+      final path = t.substring(marker.length).trim();
+      if (path.isNotEmpty) return path;
+    }
+  }
+  return null;
+}
+
 /// Whether `systemctl is-active` reports the service as running.
 bool isServiceActive(String systemctlOutput) {
   return systemctlOutput.trim() == 'active';

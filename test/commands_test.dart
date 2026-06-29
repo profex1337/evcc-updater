@@ -86,4 +86,24 @@ void main() {
       expect(script, contains('DEBIAN_FRONTEND=noninteractive'));
     });
   });
+
+  group('buildBackupScript', () {
+    final script = buildBackupScript();
+    test('backs up config + detected DB into a timestamped archive', () {
+      expect(script, contains('/etc/evcc.yaml'));
+      expect(script, contains('/var/backups/evcc'));
+      expect(script, contains('tar -czf'));
+    });
+    test('detects the DB via the config dsn, with default-location fallbacks',
+        () {
+      expect(script, contains('dsn:'));
+      expect(script, contains('/root/.evcc/evcc.db'));
+      expect(script, contains('/var/lib/evcc'));
+    });
+    test('emits machine-readable result markers', () {
+      expect(script, contains('EVCC_BACKUP_OK'));
+      expect(script, contains('EVCC_BACKUP_EMPTY'));
+      expect(script, contains('EVCC_BACKUP_FAIL'));
+    });
+  });
 }

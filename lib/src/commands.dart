@@ -456,6 +456,35 @@ systemctl enable --now evcc
 ''';
 }
 
+/// Root/bash script that snapshots the evcc config + database into a
+/// timestamped archive under `/var/backups/evcc/` before an update. The DB path
+/// is taken from the config's `dsn:` if set, otherwise probed at the common
+/// default locations (it varies by service user). Run via [installShellCommand].
+///
+/// Prints `EVCC_BACKUP_OK <path>` on success, `EVCC_BACKUP_EMPTY` when there is
+/// nothing to back up (not an error), or `EVCC_BACKUP_FAIL` + exit 1 on failure.
+String buildBackupScript() {
+  return r'''
+mkdir -p /var/backups/evcc
+ts=$(date +%Y%m%d-%H%M%S)
+out="/var/backups/evcc/evcc-backup-$ts.tar.gz"
+files=""
+if [ -f /etc/evcc.yaml ]; then files="$files /etc/evcc.yaml"; fi
+db=""
+if [ -f /etc/evcc.yaml ]; then
+  db=$(grep -E '^[[:space:]]*dsn:' /etc/evcc.yaml 2>/dev/null | head -n1 | sed 's/.*dsn:[[:space:]]*//')
+fi
+if [ -z "$db" ] || [ ! -f "$db" ]; then
+  for c in /root/.evcc/evcc.db /var/lib/evcc/.evcc/evcc.db /var/lib/evcc/evcc.db /home/*/.evcc/evcc.db; do
+    if [ -f "$c" ]; then db="$c"; break; fi
+  done
+fi
+if [ -n "$db" ] && [ -f "$db" ]; then files="$files $db"; fi
+if [ -z "$files" ]; then echo "EVCC_BACKUP_EMPTY"; exit 0; fi
+if tar -czf "$out" $files; then echo "EVCC_BACKUP_OK $out"; else echo "EVCC_BACKUP_FAIL"; exit 1; fi
+''';
+}
+
 String _upgradeCommand({required bool fullUpgrade, required bool dryRun}) {
   if (fullUpgrade) {
     return dryRun

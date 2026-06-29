@@ -438,6 +438,52 @@ class EvccUpdater {
     }
   }
 
+  /// Snapshots the evcc config + database into a timestamped archive on the Pi
+  /// (under /var/backups/evcc/) before an update. Returns the archive path, or
+  /// null when there was nothing to back up (e.g. a fresh install — not an
+  /// error). Throws [EvccUpdateException] on a real failure (rejected sudo, tar
+  /// error) so the caller can surface it and stop the update.
+  Future<String?> backup({
+    required SshConfig config,
+    required void Function(String line) onLog,
+  }) {
+    return _withConnection<String?>(
+      config: config,
+      onLog: onLog,
+      body: (runner, log) async {
+        log('Erstelle Backup (Config + Datenbank) …');
+        final result = await runner.run(
+          installShellCommand,
+          stdin: '${config.password}\n${buildBackupScript()}\n',
+          onOutput: (chunk) {
+            final t = chunk.trimRight();
+            if (t.isNotEmpty) log(t);
+          },
+        );
+        final combined = '${result.stdout}\n${result.stderr}';
+        if (isSudoPasswordFailure(combined)) {
+          throw const EvccUpdateException(
+            UpdateErrorKind.sudo,
+            'sudo hat das Passwort abgelehnt – stimmt das Pi-Passwort?',
+          );
+        }
+        final path = parseBackupPath(combined);
+        if (path != null) {
+          log('Backup gespeichert: $path');
+          return path;
+        }
+        if (combined.contains('EVCC_BACKUP_EMPTY')) {
+          log('Backup: nichts zu sichern gefunden (frische Installation?).');
+          return null;
+        }
+        throw EvccUpdateException(
+          UpdateErrorKind.unknown,
+          'Backup fehlgeschlagen (Exit ${result.exitCode}). Details im Log.',
+        );
+      },
+    );
+  }
+
   /// Restarts the evcc service and verifies it comes back active.
   Future<void> restartService({
     required SshConfig config,
