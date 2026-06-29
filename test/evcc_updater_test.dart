@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dartssh2/dartssh2.dart';
@@ -369,6 +370,25 @@ void main() {
       expect(runner.closed, isTrue);
     });
 
+    test('a non-zero apt step is a hard error, not a false "already current"',
+        () async {
+      final runner = FakeSshRunner({
+        _vQuery: [_r('0.310.0\n'), _r('0.310.0\n')],
+        _aptUpdate: [_r('')],
+        _aptUpgrade: [
+          _r('E: Could not get lock /var/lib/dpkg/lock-frontend', exitCode: 100)
+        ],
+        _svc: [_r('active\n')],
+      });
+
+      await expectLater(
+        _updaterWith(runner).run(
+            config: _config, fullUpgrade: false, dryRun: false, onLog: (_) {}),
+        throwsA(isA<EvccUpdateException>()
+            .having((e) => e.message, 'message', contains('fehlgeschlagen'))),
+      );
+    });
+
     test('fails when the service is not active after a real upgrade', () async {
       final runner = FakeSshRunner({
         _vQuery: [_r('0.310.0\n'), _r('0.311.0\n')],
@@ -603,41 +623,142 @@ void main() {
       kind: InstallKind.docker,
       container: const EvccDocker(name: 'evcc', image: 'evcc/evcc:latest'),
     );
-    final inspectCmd = dockerInspectCommand('evcc');
+    final sudoDetection = InstallDetection(
+      kind: InstallKind.docker,
+      container: const EvccDocker(name: 'evcc', image: 'evcc/evcc:latest'),
+      dockerNeedsSudo: true,
+    );
+    final jsonCmd = dockerInspectJsonCommand('evcc');
+    final jsonSudoCmd = dockerInspectJsonSudoCommand('evcc');
     const shell = 'bash -s';
+    const sudoShell = 'sudo -S bash -s';
 
-    test('compose-managed: pulls + recreates, then verifies it is running',
+    String composeInspect() => jsonEncode([
+          {
+            'Name': '/evcc',
+            'Config': {
+              'Image': 'evcc/evcc:0.123',
+              'Labels': {
+                'com.docker.compose.project.working_dir': '/home/pi/evcc',
+                'com.docker.compose.project.config_files':
+                    '/home/pi/evcc/docker-compose.yml',
+                'com.docker.compose.service': 'evcc',
+                'com.docker.compose.project': 'evcc',
+              },
+            },
+            'HostConfig': <String, dynamic>{},
+          }
+        ]);
+
+    String runInspect() => jsonEncode([
+          {
+            'Name': '/evcc',
+            'Config': {
+              'Image': 'evcc/evcc:latest',
+              'Env': ['TZ=Europe/Berlin'],
+              'Labels': <String, dynamic>{},
+            },
+            'HostConfig': {
+              'RestartPolicy': {'Name': 'unless-stopped', 'MaximumRetryCount': 0},
+              'PortBindings': {
+                '7070/tcp': [
+                  {'HostIp': '', 'HostPort': '7070'}
+                ]
+              },
+              'Binds': ['/home/pi/evcc.yaml:/etc/evcc.yaml'],
+              'NetworkMode': 'default',
+            },
+          }
+        ]);
+
+    test('compose-managed: pulls + recreates the service, then verifies',
         () async {
       final runner = FakeSshRunner({
-        inspectCmd: [
-          _r('/home/pi/evcc|/home/pi/evcc/docker-compose.yml|evcc\n')
-        ],
-        shell: [_r('Pulling evcc ... done\nRecreating evcc ... done', exitCode: 0)],
+        jsonCmd: [_r(composeInspect())],
+        shell: [_r('Pulling evcc ... done', exitCode: 0)],
+        dockerListCommand: [_r('evcc|evcc/evcc:0.123\n')],
+      });
+
+      await _updaterWith(runner).updateDocker(
+          config: _config, detection: detection, onLog: (_) {});
+
+      final stdin = runner.stdinByCommand[shell]!;
+      expect(stdin, contains("pull 'evcc'"));
+      expect(stdin, contains("up -d 'evcc'"));
+      expect(stdin, contains("-f '/home/pi/evcc/docker-compose.yml'"));
+    });
+
+    test('plain docker-run container: pulls + recreates from inspect data',
+        () async {
+      final runner = FakeSshRunner({
+        jsonCmd: [_r(runInspect())],
+        shell: [_r('recreated', exitCode: 0)],
         dockerListCommand: [_r('evcc|evcc/evcc:latest\n')],
       });
 
       await _updaterWith(runner).updateDocker(
-        config: _config,
-        detection: detection,
-        onLog: (_) {},
-      );
+          config: _config, detection: detection, onLog: (_) {});
 
       final stdin = runner.stdinByCommand[shell]!;
-      expect(stdin, contains("docker compose pull 'evcc'"));
-      expect(stdin, contains("docker compose up -d 'evcc'"));
+      expect(stdin, contains("docker pull 'evcc/evcc:latest'"));
+      expect(stdin, contains("docker rename 'evcc' 'evcc-evccpitool-old'"));
+      expect(stdin, contains("docker run -d --name 'evcc'"));
+      expect(stdin, contains("-v '/home/pi/evcc.yaml:/etc/evcc.yaml'"));
     });
 
-    test('non-compose container: refuses and tells the user to update manually',
+    test('sudo branch feeds the password as the first stdin line only',
         () async {
       final runner = FakeSshRunner({
-        inspectCmd: [_r('<no value>|<no value>|<no value>\n')],
+        jsonSudoCmd: [_r(composeInspect())],
+        sudoShell: [_r('done', exitCode: 0)],
+        dockerListSudoCommand: [_r('evcc|evcc/evcc:0.123\n')],
       });
 
+      await _updaterWith(runner).updateDocker(
+          config: _config, detection: sudoDetection, onLog: (_) {});
+
+      expect(runner.stdinByCommand[jsonSudoCmd], 'sekret\n');
+      expect(runner.stdinByCommand[sudoShell], startsWith('sekret\n'));
+      // password never appears in any command string
+      expect(runner.commandsRun.any((c) => c.contains('sekret')), isFalse);
+    });
+
+    test('container missing in detection is a clear error', () async {
+      final runner = FakeSshRunner({});
+      await expectLater(
+        _updaterWith(runner).updateDocker(
+            config: _config,
+            detection: const InstallDetection(kind: InstallKind.docker),
+            onLog: (_) {}),
+        throwsA(isA<EvccUpdateException>()),
+      );
+    });
+
+    test('a non-zero update script is reported as a failure', () async {
+      final runner = FakeSshRunner({
+        jsonCmd: [_r(composeInspect())],
+        shell: [_r('boom', exitCode: 1)],
+      });
       await expectLater(
         _updaterWith(runner).updateDocker(
             config: _config, detection: detection, onLog: (_) {}),
         throwsA(isA<EvccUpdateException>()
-            .having((e) => e.message, 'message', contains('docker compose'))),
+            .having((e) => e.message, 'm', contains('fehlgeschlagen'))),
+      );
+    });
+
+    test('container gone after the update is reported (not silent success)',
+        () async {
+      final runner = FakeSshRunner({
+        jsonCmd: [_r(composeInspect())],
+        shell: [_r('done', exitCode: 0)],
+        dockerListCommand: [_r('')], // no evcc container after
+      });
+      await expectLater(
+        _updaterWith(runner).updateDocker(
+            config: _config, detection: detection, onLog: (_) {}),
+        throwsA(isA<EvccUpdateException>()
+            .having((e) => e.kind, 'kind', UpdateErrorKind.serviceInactive)),
       );
     });
   });

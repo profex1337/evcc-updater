@@ -103,9 +103,25 @@ void main() {
         service: 'evcc',
       ));
       expect(script, contains("cd '/home/pi/evcc'"));
-      expect(script, contains("docker compose pull 'evcc'"));
-      expect(script, contains("docker compose up -d 'evcc'"));
       expect(script, contains('set -e'));
+      // v2 is probed; falls back to the v1 standalone binary.
+      expect(script, contains('docker compose version'));
+      expect(script, contains('docker-compose'));
+      expect(script, contains(r'$DC'));
+      // config file pinned with -f so a custom filename can't double-spawn.
+      expect(script, contains("-f '/home/pi/evcc/docker-compose.yml'"));
+      expect(script, contains("pull 'evcc'"));
+      expect(script, contains("up -d 'evcc'"));
+    });
+
+    test('pins the compose project with -p when known', () {
+      final script = dockerComposeUpdateScript(const DockerComposeInfo(
+        workingDir: '/srv/evcc',
+        configFile: '/srv/evcc/compose.yaml',
+        service: 'evcc',
+        project: 'myevcc',
+      ));
+      expect(script, contains("-p 'myevcc'"));
     });
 
     test('escapes single quotes so a label cannot break out of the shell', () {
@@ -125,6 +141,122 @@ void main() {
     test('wraps plain values and escapes embedded quotes', () {
       expect(shSingleQuote('evcc'), "'evcc'");
       expect(shSingleQuote("a'b"), r"'a'\''b'");
+    });
+  });
+
+  group('firstInspectObject', () {
+    test('takes the first element of the inspect array', () {
+      final o = firstInspectObject('[{"Name":"/evcc"},{"Name":"/other"}]');
+      expect(o, isNotNull);
+      expect(o!['Name'], '/evcc');
+    });
+    test('accepts a bare object too', () {
+      expect(firstInspectObject('{"Name":"/evcc"}')!['Name'], '/evcc');
+    });
+    test('returns null on empty / garbage / empty array', () {
+      expect(firstInspectObject(''), isNull);
+      expect(firstInspectObject('not json'), isNull);
+      expect(firstInspectObject('[]'), isNull);
+    });
+  });
+
+  group('composeInfoFromInspect', () {
+    test('reads compose labels into DockerComposeInfo', () {
+      final c = composeInfoFromInspect({
+        'Config': {
+          'Labels': {
+            'com.docker.compose.project.working_dir': '/home/pi/evcc',
+            'com.docker.compose.project.config_files':
+                '/home/pi/evcc/docker-compose.yml',
+            'com.docker.compose.service': 'evcc',
+            'com.docker.compose.project': 'evcc',
+          }
+        },
+      });
+      expect(c, isNotNull);
+      expect(c!.workingDir, '/home/pi/evcc');
+      expect(c.service, 'evcc');
+      expect(c.project, 'evcc');
+    });
+    test('returns null for a plain docker-run container (no compose labels)',
+        () {
+      expect(composeInfoFromInspect({'Config': {'Labels': {}}}), isNull);
+      expect(composeInfoFromInspect({'Config': {}}), isNull);
+      expect(composeInfoFromInspect({}), isNull);
+    });
+  });
+
+  group('buildDockerRunCommand', () {
+    final evccInspect = {
+      'Name': '/evcc',
+      'Config': {
+        'Image': 'evcc/evcc:latest',
+        'Env': ['TZ=Europe/Berlin', 'PATH=/usr/local/sbin:/usr/local/bin'],
+        'Labels': <String, dynamic>{},
+      },
+      'HostConfig': {
+        'RestartPolicy': {'Name': 'unless-stopped', 'MaximumRetryCount': 0},
+        'PortBindings': {
+          '7070/tcp': [
+            {'HostIp': '', 'HostPort': '7070'}
+          ]
+        },
+        'Binds': ['/home/pi/evcc.yaml:/etc/evcc.yaml'],
+        'NetworkMode': 'default',
+      },
+    };
+
+    test('reconstructs the run command faithfully from inspect', () {
+      final cmd = buildDockerRunCommand(evccInspect);
+      expect(cmd, startsWith('docker run -d'));
+      expect(cmd, contains("--name 'evcc'"));
+      expect(cmd, contains('--restart unless-stopped'));
+      expect(cmd, contains("-p '7070:7070'"));
+      expect(cmd, contains("-v '/home/pi/evcc.yaml:/etc/evcc.yaml'"));
+      expect(cmd, contains("-e 'TZ=Europe/Berlin'"));
+      expect(cmd, endsWith("'evcc/evcc:latest'"));
+    });
+    test('drops pure image-default env vars like PATH', () {
+      expect(buildDockerRunCommand(evccInspect), isNot(contains('PATH=')));
+    });
+    test('lets the image be overridden with a new tag', () {
+      expect(buildDockerRunCommand(evccInspect, image: 'evcc/evcc:0.999'),
+          endsWith("'evcc/evcc:0.999'"));
+    });
+    test('host network mode is preserved and -p is dropped', () {
+      final hostNet = {
+        'Name': '/evcc',
+        'Config': {'Image': 'evcc/evcc:latest', 'Labels': <String, dynamic>{}},
+        'HostConfig': {
+          'NetworkMode': 'host',
+          'PortBindings': {
+            '7070/tcp': [
+              {'HostIp': '', 'HostPort': '7070'}
+            ]
+          },
+          'RestartPolicy': {'Name': 'always'},
+        },
+      };
+      final cmd = buildDockerRunCommand(hostNet);
+      expect(cmd, contains("--network 'host'"));
+      expect(cmd, isNot(contains('-p ')));
+      expect(cmd, contains('--restart always'));
+    });
+  });
+
+  group('dockerRunRecreateScript', () {
+    test('pulls, backs up the old container by rename, then runs the new one',
+        () {
+      final script = dockerRunRecreateScript(
+        name: 'evcc',
+        image: 'evcc/evcc:latest',
+        runCommand: "docker run -d --name 'evcc' 'evcc/evcc:latest'",
+      );
+      expect(script, contains("docker pull 'evcc/evcc:latest'"));
+      expect(script, contains("docker stop 'evcc'"));
+      expect(script, contains("docker rename 'evcc' 'evcc-evccpitool-old'"));
+      expect(script, contains("docker run -d --name 'evcc'"));
+      expect(script, contains('set -e'));
     });
   });
 }

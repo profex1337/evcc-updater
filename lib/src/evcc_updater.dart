@@ -139,6 +139,20 @@ class EvccUpdater {
             );
           }
 
+          // A non-zero UPGRADE step (held dpkg lock, full disk, broken deps)
+          // must be a hard error — otherwise version-before == version-after and
+          // the run is falsely reported as "already current". Scoped to the
+          // upgrade step (i == 2): `apt-get update` (i == 1) can legitimately
+          // exit non-zero when an unrelated third-party repo is unreachable, and
+          // that must not block an otherwise-fine evcc upgrade.
+          if (i == 2 && result.exitCode != null && result.exitCode != 0) {
+            throw EvccUpdateException(
+              UpdateErrorKind.unknown,
+              '${step.label} fehlgeschlagen (Exit ${result.exitCode}). '
+              'Details im Log.',
+            );
+          }
+
           switch (i) {
             case 0:
               before = parseInstalledVersion(result.stdout);
@@ -337,10 +351,12 @@ class EvccUpdater {
     );
   }
 
-  /// Updates a Docker-deployed evcc by pulling the image and recreating the
-  /// container via `docker compose` in its project directory. Only works when
-  /// the container is compose-managed; a plain `docker run` container is
-  /// reported as not auto-updatable. Experimental.
+  /// Updates a Docker-deployed evcc. Inspects the container once: if it's
+  /// compose-managed, it pulls + recreates the evcc service via `docker compose`
+  /// (project/file pinned, v1 fallback); otherwise it reconstructs an equivalent
+  /// `docker run` from the inspect data and recreates the container, keeping the
+  /// old one (renamed) as a rollback — volumes are reused, so no data is lost.
+  /// Experimental: not validated against a real Docker host. Throws on failure.
   Future<void> updateDocker({
     required SshConfig config,
     required InstallDetection detection,
@@ -361,8 +377,8 @@ class EvccUpdater {
         log('evcc-Container "${container.name}" (${container.image}).');
 
         final inspectCmd = sudo
-            ? dockerInspectSudoCommand(container.name)
-            : dockerInspectCommand(container.name);
+            ? dockerInspectJsonSudoCommand(container.name)
+            : dockerInspectJsonCommand(container.name);
         log('\$ $inspectCmd');
         final inspect = await runner.run(
           inspectCmd,
@@ -375,43 +391,35 @@ class EvccUpdater {
             'sudo hat das Passwort abgelehnt – stimmt das Pi-Passwort?',
           );
         }
-
-        final compose = parseComposeInfo(inspect.stdout);
-        if (compose == null) {
-          throw EvccUpdateException(
-            UpdateErrorKind.unknown,
-            'Der evcc-Container wird nicht über docker compose verwaltet – '
-            'ein automatisches Update ist hier nicht möglich. Bitte das Image '
-            '"${container.image}" manuell aktualisieren.',
-          );
-        }
-
-        log('Aktualisiere via docker compose in ${compose.workingDir} '
-            '(Dienst ${compose.service}) …');
-        final script = dockerComposeUpdateScript(compose);
-        final shell = sudo ? installShellCommand : 'bash -s';
-        final result = await runner.run(
-          shell,
-          stdin: sudo ? '${config.password}\n$script\n' : '$script\n',
-          onOutput: (chunk) {
-            final t = chunk.trimRight();
-            if (t.isNotEmpty) log(t);
-          },
-        );
-        final combined = '${result.stdout}\n${result.stderr}';
-        if (sudo && isSudoPasswordFailure(combined)) {
+        final obj = firstInspectObject(inspect.stdout);
+        if (obj == null) {
           throw const EvccUpdateException(
-            UpdateErrorKind.sudo,
-            'sudo hat das Passwort abgelehnt – stimmt das Pi-Passwort?',
-          );
-        }
-        if (result.exitCode != null && result.exitCode != 0) {
-          throw EvccUpdateException(
             UpdateErrorKind.unknown,
-            'Docker-Update fehlgeschlagen (Exit ${result.exitCode}). '
-            'Details im Log.',
+            'Konnte den Docker-Container nicht inspizieren.',
           );
         }
+
+        final compose = composeInfoFromInspect(obj);
+        final String script;
+        if (compose != null) {
+          log('Aktualisiere via docker compose in ${compose.workingDir} '
+              '(Dienst ${compose.service}) …');
+          script = dockerComposeUpdateScript(compose);
+        } else {
+          log('Container ohne docker compose – aktualisiere per Image-Pull + '
+              'Neuanlage. Der alte Container bleibt als Backup erhalten.');
+          final image =
+              ((obj['Config'] is Map) ? (obj['Config'] as Map)['Image'] : null)
+                      ?.toString() ??
+                  container.image;
+          script = dockerRunRecreateScript(
+            name: container.name,
+            image: image,
+            runCommand: buildDockerRunCommand(obj, image: image),
+          );
+        }
+
+        await _runRootScript(runner, log, config, sudo: sudo, script: script);
 
         final verify = await runner.run(
           sudo ? dockerListSudoCommand : dockerListCommand,
@@ -420,12 +428,48 @@ class EvccUpdater {
         if (parseEvccDocker(verify.stdout) == null) {
           throw const EvccUpdateException(
             UpdateErrorKind.serviceInactive,
-            'evcc-Container läuft nach dem Update nicht.',
+            'evcc-Container läuft nach dem Update nicht. Der vorherige Container '
+            'wurde als Backup (Suffix "-evccpitool-old") behalten.',
           );
         }
         log('Fertig – evcc-Container läuft wieder.');
       },
     );
+  }
+
+  /// Runs a multi-line root [script] via `bash -s` (or `sudo -S bash -s`),
+  /// streaming output and mapping a rejected sudo password / non-zero exit to a
+  /// clear error. Shared by the compose and `docker run` update paths.
+  Future<void> _runRootScript(
+    SshRunner runner,
+    void Function(String) log,
+    SshConfig config, {
+    required bool sudo,
+    required String script,
+  }) async {
+    final shell = sudo ? installShellCommand : 'bash -s';
+    final result = await runner.run(
+      shell,
+      stdin: sudo ? '${config.password}\n$script\n' : '$script\n',
+      onOutput: (chunk) {
+        final t = chunk.trimRight();
+        if (t.isNotEmpty) log(t);
+      },
+    );
+    final combined = '${result.stdout}\n${result.stderr}';
+    if (sudo && isSudoPasswordFailure(combined)) {
+      throw const EvccUpdateException(
+        UpdateErrorKind.sudo,
+        'sudo hat das Passwort abgelehnt – stimmt das Pi-Passwort?',
+      );
+    }
+    if (result.exitCode != null && result.exitCode != 0) {
+      throw EvccUpdateException(
+        UpdateErrorKind.unknown,
+        'Docker-Update fehlgeschlagen (Exit ${result.exitCode}). '
+        'Details im Log.',
+      );
+    }
   }
 
   /// Restarts the evcc service and verifies it comes back active.

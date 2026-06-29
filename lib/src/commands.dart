@@ -5,6 +5,8 @@
 /// evcc-Pi on 2026-06-28.
 library;
 
+import 'dart:convert';
+
 /// A single command in the update sequence.
 class SshStep {
   /// Short human-readable label shown in the live log.
@@ -52,10 +54,16 @@ class DockerComposeInfo {
   final String workingDir;
   final String configFile;
   final String service;
+
+  /// The compose project name (`com.docker.compose.project`). Empty if unknown.
+  /// Pinned with `-p` so the update can never spawn a duplicate project.
+  final String project;
+
   const DockerComposeInfo({
     required this.workingDir,
     required this.configFile,
     required this.service,
+    this.project = '',
   });
 }
 
@@ -106,8 +114,17 @@ bool isDockerPermissionError(String output) {
       o.contains('cannot connect to the docker daemon');
 }
 
-/// `docker inspect` that prints `workingDir|configFile|service` from the
-/// compose labels (or `<no value>` for each missing label).
+/// `docker inspect <name>` — the full container JSON (parsed in Dart). Used for
+/// both compose-label detection and `docker run` reconstruction.
+String dockerInspectJsonCommand(String container) =>
+    'docker inspect ${shSingleQuote(container)}';
+
+/// sudo variant of [dockerInspectJsonCommand].
+String dockerInspectJsonSudoCommand(String container) =>
+    'sudo -S ${dockerInspectJsonCommand(container)}';
+
+/// `docker inspect --format` that prints `workingDir|configFile|service` from
+/// the compose labels. Retained for the string-based parser/tests.
 String dockerInspectCommand(String container) =>
     'docker inspect ${shSingleQuote(container)} --format '
     '\'{{ index .Config.Labels "com.docker.compose.project.working_dir"}}|'
@@ -118,9 +135,48 @@ String dockerInspectCommand(String container) =>
 String dockerInspectSudoCommand(String container) =>
     'sudo -S ${dockerInspectCommand(container)}';
 
-/// Parses the `workingDir|configFile|service` line from [dockerInspectCommand].
-/// Returns null unless both a working dir and a service name are present (i.e.
-/// the container really is docker-compose-managed).
+/// Decodes `docker inspect` output (a JSON array, or a bare object) and returns
+/// the first container object, or null on empty/garbage.
+Map<String, dynamic>? firstInspectObject(String json) {
+  try {
+    final decoded = jsonDecode(json.trim());
+    if (decoded is List) {
+      final first = decoded.firstWhere((e) => e is Map, orElse: () => null);
+      return first == null ? null : Map<String, dynamic>.from(first as Map);
+    }
+    if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Builds a validated [DockerComposeInfo] or null. The working dir must be an
+/// absolute path and the service must match compose's charset — anything odd
+/// falls through to a non-compose path rather than into a shell script (the
+/// escaping in [dockerComposeUpdateScript] is the primary protection; this
+/// rejects obviously-tampered labels early).
+DockerComposeInfo? _composeInfo({
+  required String workingDir,
+  required String configFile,
+  required String service,
+  String project = '',
+}) {
+  if (workingDir.isEmpty || service.isEmpty) return null;
+  final validService = RegExp(r'^[A-Za-z0-9._-]+$');
+  if (!workingDir.startsWith('/') || !validService.hasMatch(service)) {
+    return null;
+  }
+  return DockerComposeInfo(
+    workingDir: workingDir,
+    configFile: configFile,
+    service: service,
+    project: project,
+  );
+}
+
+/// Parses the `workingDir|configFile|service` line from [dockerInspectCommand]
+/// (the templated form). Returns null unless it's really compose-managed.
 DockerComposeInfo? parseComposeInfo(String inspectOutput) {
   final line = inspectOutput
       .split('\n')
@@ -134,38 +190,165 @@ DockerComposeInfo? parseComposeInfo(String inspectOutput) {
     return v == '<no value>' ? '' : v;
   }
 
-  final workingDir = at(0);
-  final service = at(2);
-  if (workingDir.isEmpty || service.isEmpty) return null;
-  // Defense-in-depth: only accept sane values (the working dir must be an
-  // absolute path; the service name must match compose's own charset). Anything
-  // odd falls through to the "update manually" path instead of into a shell
-  // script. The shell escaping in [dockerComposeUpdateScript] is the primary
-  // protection; this rejects obviously-tampered labels early.
-  final validService = RegExp(r'^[A-Za-z0-9._-]+$');
-  if (!workingDir.startsWith('/') || !validService.hasMatch(service)) {
-    return null;
-  }
-  return DockerComposeInfo(
-    workingDir: workingDir,
+  return _composeInfo(
+    workingDir: at(0),
     configFile: at(1),
-    service: service,
+    service: at(2),
+  );
+}
+
+/// Reads the docker-compose labels off a full `docker inspect` object. Returns
+/// null for a plain `docker run` container (no compose labels).
+DockerComposeInfo? composeInfoFromInspect(Map<String, dynamic> container) {
+  final config = container['Config'];
+  final labels = (config is Map && config['Labels'] is Map)
+      ? Map<String, dynamic>.from(config['Labels'] as Map)
+      : <String, dynamic>{};
+  String lab(String k) => (labels[k] ?? '').toString().trim();
+  return _composeInfo(
+    workingDir: lab('com.docker.compose.project.working_dir'),
+    configFile: lab('com.docker.compose.project.config_files'),
+    service: lab('com.docker.compose.service'),
+    project: lab('com.docker.compose.project'),
   );
 }
 
 /// The root/bash script that updates a compose-managed evcc: pull the image,
 /// then recreate only the evcc service in its project directory.
 ///
-/// Every interpolated value is shell-escaped so a tampered compose label can't
-/// break out of the quoting and inject commands.
+/// Pins the project (`-p`) and config file(s) (`-f`, comma-separated supported)
+/// so a custom project name/filename can't make `up -d` spawn a *second*
+/// container. Falls back to the v1 standalone binary when the v2 plugin is
+/// absent. Every interpolated value is shell-escaped against label tampering.
 String dockerComposeUpdateScript(DockerComposeInfo info) {
   final dir = shSingleQuote(info.workingDir);
   final svc = shSingleQuote(info.service);
+  final opts = <String>[];
+  if (info.project.isNotEmpty) {
+    opts.addAll(['-p', shSingleQuote(info.project)]);
+  }
+  for (final cf in info.configFile.split(',')) {
+    final f = cf.trim();
+    if (f.isNotEmpty) opts.addAll(['-f', shSingleQuote(f)]);
+  }
+  final dc = opts.isEmpty ? r'$DC' : '\$DC ${opts.join(' ')}';
   return '''
 set -e
 cd $dir
-docker compose pull $svc
-docker compose up -d $svc
+if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
+$dc pull $svc
+$dc up -d $svc
+''';
+}
+
+/// Environment variables that are image/base defaults, not user config — these
+/// are dropped when reconstructing a `docker run`, since the image re-applies
+/// them anyway and re-passing a stale value could clobber the new image's.
+const _imageDefaultEnv = {'PATH'};
+
+/// Reconstructs an equivalent `docker run -d …` command from a full
+/// `docker inspect` object, preserving name, restart policy, port bindings,
+/// bind/volume mounts, user env and a non-default network. [image] overrides
+/// the image reference (e.g. to pin a freshly-pulled tag). Used to update a
+/// plain (non-compose) container by recreating it.
+String buildDockerRunCommand(Map<String, dynamic> container, {String? image}) {
+  final config = (container['Config'] is Map)
+      ? Map<String, dynamic>.from(container['Config'] as Map)
+      : <String, dynamic>{};
+  final host = (container['HostConfig'] is Map)
+      ? Map<String, dynamic>.from(container['HostConfig'] as Map)
+      : <String, dynamic>{};
+
+  final name =
+      (container['Name'] ?? '').toString().replaceFirst(RegExp(r'^/'), '');
+  final img = (image ?? config['Image'] ?? '').toString();
+  final networkMode = (host['NetworkMode'] ?? '').toString();
+  final hostNetwork = networkMode == 'host';
+
+  final args = <String>['docker', 'run', '-d'];
+  if (name.isNotEmpty) args.addAll(['--name', shSingleQuote(name)]);
+
+  final rp = (host['RestartPolicy'] is Map)
+      ? Map<String, dynamic>.from(host['RestartPolicy'] as Map)
+      : <String, dynamic>{};
+  final rpName = (rp['Name'] ?? '').toString();
+  if (rpName.isNotEmpty && rpName != 'no') {
+    final retries = rp['MaximumRetryCount'];
+    if (rpName == 'on-failure' && retries is int && retries > 0) {
+      args.addAll(['--restart', '$rpName:$retries']);
+    } else {
+      args.addAll(['--restart', rpName]);
+    }
+  }
+
+  // Published ports are discarded under host networking, so skip them there.
+  if (!hostNetwork && host['PortBindings'] is Map) {
+    final pb = Map<String, dynamic>.from(host['PortBindings'] as Map);
+    for (final entry in pb.entries) {
+      final cport = entry.key; // e.g. "7070/tcp"
+      final num = cport.split('/').first;
+      final proto = cport.endsWith('/udp') ? '/udp' : '';
+      final bindings = entry.value;
+      if (bindings is List) {
+        for (final b in bindings) {
+          if (b is Map) {
+            final hostIp = (b['HostIp'] ?? '').toString();
+            final hostPort = (b['HostPort'] ?? '').toString();
+            final spec = hostIp.isNotEmpty
+                ? '$hostIp:$hostPort:$num$proto'
+                : '$hostPort:$num$proto';
+            args.addAll(['-p', shSingleQuote(spec)]);
+          }
+        }
+      }
+    }
+  }
+
+  final binds = host['Binds'];
+  if (binds is List) {
+    for (final b in binds) {
+      args.addAll(['-v', shSingleQuote(b.toString())]);
+    }
+  }
+
+  final env = config['Env'];
+  if (env is List) {
+    for (final e in env) {
+      final s = e.toString();
+      if (_imageDefaultEnv.contains(s.split('=').first)) continue;
+      args.addAll(['-e', shSingleQuote(s)]);
+    }
+  }
+
+  if (networkMode.isNotEmpty &&
+      networkMode != 'default' &&
+      networkMode != 'bridge') {
+    args.addAll(['--network', shSingleQuote(networkMode)]);
+  }
+
+  args.add(shSingleQuote(img));
+  return args.join(' ');
+}
+
+/// The root/bash script that updates a plain `docker run` container: pull the
+/// new image, keep the old container as a rollback by renaming it (never
+/// deleting data), then start the recreated container. [runCommand] is the
+/// reconstructed `docker run` from [buildDockerRunCommand].
+String dockerRunRecreateScript({
+  required String name,
+  required String image,
+  required String runCommand,
+}) {
+  final n = shSingleQuote(name);
+  final backup = shSingleQuote('$name-evccpitool-old');
+  final img = shSingleQuote(image);
+  return '''
+set -e
+docker pull $img
+docker rm -f $backup >/dev/null 2>&1 || true
+docker stop $n
+docker rename $n $backup
+$runCommand
 ''';
 }
 
