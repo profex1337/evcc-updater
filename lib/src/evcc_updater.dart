@@ -7,6 +7,7 @@ import 'commands.dart';
 import 'dartssh2_runner.dart';
 import 'host_key.dart';
 import 'parsing.dart';
+import 'services/homeassistant_service.dart';
 import 'services/pi_service.dart';
 import 'services/pihole_service.dart';
 import 'services/system_service.dart';
@@ -327,6 +328,23 @@ class EvccUpdater {
         log('Erkenne Dienste …');
         final out = <ServiceStatus>[];
 
+        // ---- Docker listing (shared by evcc-docker + Home Assistant) ----
+        // Fetched once; sudo retry only if the daemon denies access and allowed.
+        var docker = await runner.run(dockerListCommand);
+        if (allowSudoForDocker &&
+            isDockerPermissionError('${docker.stdout}\n${docker.stderr}')) {
+          docker = await runner.run(dockerListSudoCommand,
+              stdin: '${config.password}\n');
+          // Best-effort detection must not throw (that would abort Pi-hole /
+          // System detection) — but a rejected sudo password would otherwise
+          // make docker-based evcc/Home Assistant look "not installed", so warn.
+          if (isSudoPasswordFailure('${docker.stdout}\n${docker.stderr}')) {
+            log('sudo-Passwort abgelehnt – Docker-Dienste konnten nicht '
+                'erkannt werden.');
+          }
+        }
+        final dockerPs = docker.stdout;
+
         // ---- evcc (apt or docker) ----
         final dpkg = await runner.run(versionQuery);
         final aptV = parseInstalledVersion(dpkg.stdout);
@@ -342,13 +360,7 @@ class EvccUpdater {
             detail: 'apt · Dienst ${active ? 'aktiv' : 'inaktiv'}',
           ));
         } else {
-          var listing = await runner.run(dockerListCommand);
-          if (allowSudoForDocker &&
-              isDockerPermissionError('${listing.stdout}\n${listing.stderr}')) {
-            listing = await runner.run(dockerListSudoCommand,
-                stdin: '${config.password}\n');
-          }
-          final c = parseEvccDocker(listing.stdout);
+          final c = parseEvccDocker(dockerPs);
           out.add(c != null
               ? ServiceStatus(
                   id: 'evcc',
@@ -378,6 +390,18 @@ class EvccUpdater {
         } else {
           out.add(ServiceStatus.absent('pihole', 'Pi-hole'));
         }
+
+        // ---- Home Assistant (Docker container) ----
+        final ha = parseHomeAssistant(dockerPs);
+        out.add(ha != null
+            ? ServiceStatus(
+                id: 'homeassistant',
+                name: 'Home Assistant',
+                installed: true,
+                version: ha.version,
+                active: true,
+                detail: 'Docker · ${ha.name}')
+            : ServiceStatus.absent('homeassistant', 'Home Assistant'));
 
         // ---- System (always present) ----
         final os = await runner.run(systemOsCommand);
@@ -497,6 +521,142 @@ class EvccUpdater {
           log('Pi-hole installiert – Einrichtung im Browser unter /admin.');
         },
       );
+
+  /// Installs Home Assistant as a Docker container, unattended (installs Docker
+  /// first if missing). Experimental — see buildHomeAssistantInstallScript.
+  Future<void> installHomeAssistant({
+    required SshConfig config,
+    required void Function(String line) onLog,
+  }) =>
+      _withConnection<void>(
+        config: config,
+        onLog: onLog,
+        body: (runner, log) async {
+          log('Installiere Home Assistant (Docker) … (dauert ein paar Minuten)');
+          await _runRootScript(runner, log, config,
+              sudo: true,
+              script: buildHomeAssistantInstallScript(),
+              failMsg: 'Home-Assistant-Installation fehlgeschlagen');
+          // `docker run -d` returns 0 once the daemon accepts the container, so
+          // verify it is actually running (port clash / missing privileges /
+          // crash would otherwise be reported as success).
+          var verify = await runner.run(dockerListCommand);
+          if (isDockerPermissionError('${verify.stdout}\n${verify.stderr}')) {
+            verify = await runner.run(dockerListSudoCommand,
+                stdin: '${config.password}\n');
+          }
+          if (parseHomeAssistant(verify.stdout) == null) {
+            throw const EvccUpdateException(
+              UpdateErrorKind.serviceInactive,
+              'Home Assistant läuft nach der Installation nicht (siehe '
+              'Live-Log) – evtl. Port-Konflikt (8123) oder fehlende '
+              'Docker-Rechte.',
+            );
+          }
+          log('Home Assistant läuft – Einrichtung im Browser unter Port '
+              '$homeAssistantPort.');
+        },
+      );
+
+  /// Updates the Home Assistant container: pull the latest of its current tag
+  /// and recreate it (reconstructed from `docker inspect`, so the user's mounts
+  /// stay; HA state lives in the bound /config volume, so no data is lost). The
+  /// old container is kept as a rollback. Experimental.
+  Future<void> updateHomeAssistant({
+    required SshConfig config,
+    required void Function(String line) onLog,
+  }) {
+    return _withConnection<void>(
+      config: config,
+      onLog: onLog,
+      body: (runner, log) async {
+        // Locate the HA container (the daemon may require sudo).
+        var listing = await runner.run(dockerListCommand);
+        var sudo = false;
+        if (isDockerPermissionError('${listing.stdout}\n${listing.stderr}')) {
+          sudo = true;
+          listing = await runner.run(dockerListSudoCommand,
+              stdin: '${config.password}\n');
+          if (isSudoPasswordFailure('${listing.stdout}\n${listing.stderr}')) {
+            throw const EvccUpdateException(UpdateErrorKind.sudo,
+                'sudo hat das Passwort abgelehnt – stimmt das Pi-Passwort?');
+          }
+        }
+        final ha = parseHomeAssistant(listing.stdout);
+        if (ha == null) {
+          throw const EvccUpdateException(
+            UpdateErrorKind.unknown,
+            'Kein Home-Assistant-Container gefunden.',
+          );
+        }
+        log('Home-Assistant-Container "${ha.name}" (${ha.image}).');
+
+        final inspectCmd = sudo
+            ? dockerInspectJsonSudoCommand(ha.name)
+            : dockerInspectJsonCommand(ha.name);
+        log('\$ $inspectCmd');
+        final inspect = await runner.run(inspectCmd,
+            stdin: sudo ? '${config.password}\n' : null);
+        if (sudo &&
+            isSudoPasswordFailure('${inspect.stdout}\n${inspect.stderr}')) {
+          throw const EvccUpdateException(UpdateErrorKind.sudo,
+              'sudo hat das Passwort abgelehnt – stimmt das Pi-Passwort?');
+        }
+        final obj = firstInspectObject(inspect.stdout);
+        if (obj == null) {
+          throw const EvccUpdateException(
+            UpdateErrorKind.unknown,
+            'Konnte den Home-Assistant-Container nicht inspizieren.',
+          );
+        }
+
+        // Compose-managed HA: update via `docker compose` so the project stays
+        // intact (recreating it as a plain `docker run` would orphan it and can
+        // drop named volumes). Otherwise rebuild an equivalent `docker run`.
+        final compose = composeInfoFromInspect(obj);
+        final String script;
+        if (compose != null) {
+          log('Aktualisiere via docker compose in ${compose.workingDir} '
+              '(Dienst ${compose.service}) …');
+          script = dockerComposeUpdateScript(compose);
+        } else {
+          final image =
+              ((obj['Config'] is Map) ? (obj['Config'] as Map)['Image'] : null)
+                      ?.toString() ??
+                  ha.image;
+          if (image.contains('@sha256:')) {
+            throw const EvccUpdateException(
+              UpdateErrorKind.unknown,
+              'Das Image ist per Digest gepinnt (@sha256:…) und kann nicht '
+              'automatisch aktualisiert werden – bitte ein Image-Tag setzen.',
+            );
+          }
+          script = dockerRunRecreateScript(
+            name: ha.name,
+            image: image,
+            runCommand: buildDockerRunCommand(obj, image: image),
+          );
+        }
+        await _runRootScript(runner, log, config,
+            sudo: sudo,
+            script: script,
+            failMsg: 'Home-Assistant-Update fehlgeschlagen');
+
+        final verify = await runner.run(
+          sudo ? dockerListSudoCommand : dockerListCommand,
+          stdin: sudo ? '${config.password}\n' : null,
+        );
+        if (parseHomeAssistant(verify.stdout) == null) {
+          throw const EvccUpdateException(
+            UpdateErrorKind.serviceInactive,
+            'Home-Assistant-Container läuft nach dem Update nicht. Der '
+            'vorherige Container wurde als Backup behalten.',
+          );
+        }
+        log('Fertig – Home Assistant läuft wieder.');
+      },
+    );
+  }
 
   /// Whole-system upgrade: refresh lists (tolerant) then `apt-get full-upgrade`.
   Future<void> upgradeSystem({

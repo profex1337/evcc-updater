@@ -1,5 +1,5 @@
 name: evcc_updater
-description: "Android-App: Raspberry-Pi-Dienste per SSH verwalten — evcc und Pi-hole installieren/aktualisieren, ganzes System aktualisieren, Live-Status, Pi-Suche und mehrere Profile."
+description: "Android-App: Raspberry-Pi-Dienste per SSH verwalten — evcc, Pi-hole und Home Assistant installieren/aktualisieren, ganzes System aktualisieren, Live-Status, Pi-Suche und mehrere Profile."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.12.1+26
+version: 0.13.0+27
 
 environment:
   sdk: ^3.12.2

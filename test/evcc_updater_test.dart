@@ -584,6 +584,136 @@ void main() {
       expect(list.firstWhere((s) => s.id == 'pihole').installed, isFalse);
       expect(list.firstWhere((s) => s.id == 'system').updateAvailable, isFalse);
     });
+
+    test('detects a Home Assistant container from docker ps', () async {
+      final runner = FakeSshRunner({
+        _vQuery: [_r('0.310.0\n')],
+        _svc: [_r('active\n')],
+        dockerListCommand: [
+          _r('homeassistant|ghcr.io/home-assistant/home-assistant:stable\n')
+        ],
+        piholeVersionCommand: [_r('')],
+        systemOsCommand: [_r('PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"')],
+        systemPendingCommand: [_r('0 upgraded, 0 newly installed.')],
+      });
+
+      final list =
+          await _updaterWith(runner).detectServices(config: _config, onLog: (_) {});
+      final ha = list.firstWhere((s) => s.id == 'homeassistant');
+      expect(ha.installed, isTrue);
+      expect(ha.version, 'stable');
+    });
+  });
+
+  group('EvccUpdater Home Assistant actions', () {
+    test('installHomeAssistant installs as root, then verifies it is running',
+        () async {
+      final runner = FakeSshRunner({
+        installShellCommand: [_r('Home Assistant gestartet.')],
+        dockerListCommand: [
+          _r('homeassistant|ghcr.io/home-assistant/home-assistant:stable\n')
+        ],
+      });
+      await _updaterWith(runner)
+          .installHomeAssistant(config: _config, onLog: (_) {});
+      expect(runner.commandsRun, contains(installShellCommand));
+      final stdin = runner.stdinByCommand[installShellCommand]!;
+      expect(stdin, startsWith('sekret\n')); // sudo password consumed first
+      expect(stdin, contains('ghcr.io/home-assistant/home-assistant:stable'));
+    });
+
+    test('installHomeAssistant surfaces a Home-Assistant-specific error',
+        () async {
+      final runner = FakeSshRunner({
+        installShellCommand: [_r('boom', exitCode: 1)],
+      });
+      await expectLater(
+        _updaterWith(runner).installHomeAssistant(config: _config, onLog: (_) {}),
+        throwsA(isA<EvccUpdateException>().having((e) => e.message, 'message',
+            contains('Home-Assistant-Installation'))),
+      );
+    });
+
+    test('installHomeAssistant fails when the container is not running after',
+        () async {
+      final runner = FakeSshRunner({
+        installShellCommand: [_r('')],
+        dockerListCommand: [_r('evcc|evcc/evcc:latest\n')], // no HA came up
+      });
+      await expectLater(
+        _updaterWith(runner).installHomeAssistant(config: _config, onLog: (_) {}),
+        throwsA(isA<EvccUpdateException>()
+            .having((e) => e.kind, 'kind', UpdateErrorKind.serviceInactive)),
+      );
+    });
+
+    test('updateHomeAssistant pulls + recreates the container (no sudo)',
+        () async {
+      final inspectCmd = dockerInspectJsonCommand('homeassistant');
+      final runner = FakeSshRunner({
+        dockerListCommand: [
+          _r('homeassistant|ghcr.io/home-assistant/home-assistant:stable\n')
+        ],
+        inspectCmd: [
+          _r('[{"Name":"/homeassistant","Config":{"Image":'
+              '"ghcr.io/home-assistant/home-assistant:stable"},"HostConfig":'
+              '{"NetworkMode":"host","Privileged":true,"Binds":'
+              '["/opt/homeassistant/config:/config"]}}]')
+        ],
+        'bash -s': [_r('')],
+      });
+      await _updaterWith(runner)
+          .updateHomeAssistant(config: _config, onLog: (_) {});
+      final recreate = runner.stdinByCommand['bash -s']!;
+      expect(recreate, contains('docker pull'));
+      expect(recreate, contains('ghcr.io/home-assistant/home-assistant:stable'));
+    });
+
+    test('updateHomeAssistant uses docker compose for a compose-managed HA',
+        () async {
+      final inspectCmd = dockerInspectJsonCommand('homeassistant');
+      final runner = FakeSshRunner({
+        dockerListCommand: [
+          _r('homeassistant|ghcr.io/home-assistant/home-assistant:stable\n')
+        ],
+        inspectCmd: [
+          _r(jsonEncode([
+            {
+              'Name': '/homeassistant',
+              'Config': {
+                'Image': 'ghcr.io/home-assistant/home-assistant:stable',
+                'Labels': {
+                  'com.docker.compose.project.working_dir': '/home/pi/ha',
+                  'com.docker.compose.project.config_files':
+                      '/home/pi/ha/docker-compose.yml',
+                  'com.docker.compose.service': 'homeassistant',
+                  'com.docker.compose.project': 'ha',
+                },
+              },
+              'HostConfig': <String, dynamic>{},
+            }
+          ]))
+        ],
+        'bash -s': [_r('')],
+      });
+      await _updaterWith(runner)
+          .updateHomeAssistant(config: _config, onLog: (_) {});
+      final script = runner.stdinByCommand['bash -s']!;
+      expect(script, contains('docker compose'));
+      expect(script, contains('/home/pi/ha'));
+    });
+
+    test('updateHomeAssistant fails clearly when no HA container exists',
+        () async {
+      final runner = FakeSshRunner({
+        dockerListCommand: [_r('evcc|evcc/evcc:latest\n')],
+      });
+      await expectLater(
+        _updaterWith(runner).updateHomeAssistant(config: _config, onLog: (_) {}),
+        throwsA(isA<EvccUpdateException>().having((e) => e.message, 'message',
+            contains('Home-Assistant-Container'))),
+      );
+    });
   });
 
   group('EvccUpdater Pi-hole + System actions', () {

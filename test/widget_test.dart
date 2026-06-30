@@ -53,8 +53,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Pi-Tool'), findsOneWidget); // app bar wordmark
-    expect(find.text('Verbindung testen'), findsOneWidget); // compact Test button
-    expect(find.textContaining('Verbindung testen'), findsWidgets); // + hint
+    expect(find.text('Verbindung herstellen'),
+        findsOneWidget); // compact connect button
+    expect(find.textContaining('Verbindung herstellen'),
+        findsWidgets); // + hint
     expect(find.text('Live-Log'), findsOneWidget);
     // Host/IP, Benutzer, Port, Passwort.
     expect(find.byType(TextField), findsNWidgets(4));
@@ -66,7 +68,8 @@ void main() {
     await tester.pumpWidget(_page());
     await tester.pumpAndSettle();
 
-    await tester.tap(find.widgetWithText(OutlinedButton, 'Verbindung testen'));
+    await tester
+        .tap(find.widgetWithText(OutlinedButton, 'Verbindung herstellen'));
     await tester.pump(); // surface the SnackBar
 
     expect(find.text('Bitte Host/IP eintragen.'), findsOneWidget);

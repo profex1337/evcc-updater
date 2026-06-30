@@ -149,7 +149,7 @@ class _UpdaterPageState extends State<UpdaterPage>
   String _channel = 'stable';
   bool _autoCheck = false;
   bool _backupBeforeUpdate = true;
-  bool _testing = false; // a "Verbindung testen" run is in flight
+  bool _testing = false; // a "Verbindung herstellen" run is in flight
   bool? _connectionOk; // null=untested, true=ok, false=failed (Test-Button color)
   List<ServiceStatus> _services = []; // detected services → service cards
   List<Profile> _profiles = [const Profile(name: 'Standard')]; // growable
@@ -164,6 +164,7 @@ class _UpdaterPageState extends State<UpdaterPage>
   bool _hostKeyIssue = false;
   SshConfig? _lastConfig;
   Future<void> Function()? _lastAction;
+  int _detectGen = 0; // bumped on Pi switch to invalidate in-flight detection
 
   List<TextEditingController> get _savedControllers =>
       [_host, _port, _user, _password, _privateKey, _keyPassphrase, _uiPort];
@@ -265,6 +266,24 @@ class _UpdaterPageState extends State<UpdaterPage>
     _fullUpgrade = p.fullUpgrade;
   }
 
+  /// Switching to another Pi: drop everything tied to the previous host so
+  /// nothing from it leaks into the new Pi's view — detected services, the
+  /// connection indicator, banners, the host-key "trust new key" prompt and the
+  /// stashed trust-and-retry target ([_lastConfig]/[_lastAction]). Bumping
+  /// [_detectGen] also invalidates any in-flight [_autoStatus] from the old Pi.
+  /// Call inside the switching setState; pair with [_autoStatus] after it so the
+  /// new Pi is silently re-detected when auto-check is on.
+  void _resetDetectionForNewPi() {
+    _services = [];
+    _connectionOk = null;
+    _setupUrl = null;
+    _statusMessage = null;
+    _hostKeyIssue = false;
+    _lastConfig = null;
+    _lastAction = null;
+    _detectGen++;
+  }
+
   /// Debounced auto-save: persists ~0.8s after the last edit.
   void _scheduleSave() {
     _saveDebounce?.cancel();
@@ -314,8 +333,10 @@ class _UpdaterPageState extends State<UpdaterPage>
     setState(() {
       _activeIndex = i;
       _applyProfile(_profiles[i]);
+      _resetDetectionForNewPi();
     });
     _persistSettings();
+    _autoStatus(); // re-detect the newly selected Pi when auto-check is on
   }
 
   Future<void> _addProfile() async {
@@ -327,6 +348,7 @@ class _UpdaterPageState extends State<UpdaterPage>
       _profiles = next;
       _activeIndex = next.length - 1;
       _applyProfile(_profiles[_activeIndex]);
+      _resetDetectionForNewPi();
     });
     _persistSettings();
   }
@@ -361,8 +383,10 @@ class _UpdaterPageState extends State<UpdaterPage>
       _profiles = next;
       _activeIndex = _activeIndex.clamp(0, next.length - 1);
       _applyProfile(_profiles[_activeIndex]);
+      _resetDetectionForNewPi();
     });
     _persistSettings();
+    _autoStatus(); // re-detect the now-active Pi when auto-check is on
   }
 
   Future<String?> _promptName(String title, String initial) async {
@@ -803,6 +827,61 @@ class _UpdaterPageState extends State<UpdaterPage>
     _openUrl('$_uiScheme://${_host.text.trim()}/admin');
   }
 
+  // ---- Home Assistant service actions ----
+
+  Future<void> _updateHomeAssistant() async {
+    if (_busy) return;
+    final config = _prepare();
+    if (config == null) return;
+    _lastAction = _updateHomeAssistant;
+    await _guard(() async {
+      await _updater.updateHomeAssistant(config: config, onLog: _appendLog);
+      if (!mounted) return;
+      setState(() {
+        _statusMessage = 'Home Assistant aktualisiert.';
+        _statusOk = true;
+      });
+      _addHistory('Home Assistant aktualisiert.');
+      await _refreshServices(config);
+    });
+  }
+
+  Future<void> _installHomeAssistant() async {
+    if (_busy) return;
+    if (!await _confirm(
+      'Home Assistant installieren?',
+      'Installiert Home Assistant als Docker-Container auf '
+          '${_host.text.trim()} (bei Bedarf wird zuerst Docker installiert).\n\n'
+          'Experimentell: nicht gegen jede Konfiguration getestet; die '
+          'Einrichtung erfolgt danach im Browser unter Port 8123.',
+    )) {
+      return;
+    }
+    final config = _prepare();
+    if (config == null) return;
+    _lastAction = _installHomeAssistant;
+    await _guard(() async {
+      await _updater.installHomeAssistant(config: config, onLog: _appendLog);
+      if (!mounted) return;
+      setState(() {
+        _statusMessage =
+            'Home Assistant installiert – im Browser unter Port 8123 einrichten.';
+        _statusOk = true;
+        _setupUrl = 'http://${_host.text.trim()}:8123';
+      });
+      _addHistory('Home Assistant installiert.');
+      await _refreshServices(config);
+    });
+  }
+
+  void _openHomeAssistant() {
+    if (_host.text.trim().isEmpty) {
+      _snack('Bitte zuerst Host/IP eintragen.');
+      return;
+    }
+    _openUrl('http://${_host.text.trim()}:8123');
+  }
+
   /// Re-trust a changed host key, then retry the action that hit it.
   Future<void> _trustAndRetry() async {
     if (_busy) return; // synchronous re-entrancy guard: forgetHostKey is async
@@ -922,15 +1001,17 @@ class _UpdaterPageState extends State<UpdaterPage>
     if (port == null) return;
     if (_authMode == AuthMode.password && _password.text.isEmpty) return;
     if (_authMode == AuthMode.key && _privateKey.text.trim().isEmpty) return;
+    final gen = _detectGen; // invalidated if the user switches Pi mid-detection
     try {
       // Silent launch check stays password-free: never escalate docker to sudo
-      // here (only an explicit "Verbindung testen"/action does that).
+      // here (only the explicit "Verbindung herstellen"/an action does that).
       final services = await _updater.detectServices(
         config: _configFor(port),
         onLog: (_) {},
         allowSudoForDocker: false,
       );
-      if (!mounted || _busy) return; // don't clobber an action started meanwhile
+      // Don't clobber an action started meanwhile, or a switch to another Pi.
+      if (!mounted || _busy || gen != _detectGen) return;
       setState(() {
         _services = services;
         _connectionOk = true;
@@ -946,7 +1027,12 @@ class _UpdaterPageState extends State<UpdaterPage>
   Future<void> _refreshServices(SshConfig config) async {
     try {
       final s = await _updater.detectServices(config: config, onLog: (_) {});
-      if (mounted) setState(() => _services = s);
+      if (mounted) {
+        setState(() {
+          _services = s;
+          _connectionOk = true; // a successful detect proves the Pi is reachable
+        });
+      }
     } catch (_) {
       // keep the last snapshot
     }
@@ -1191,7 +1277,7 @@ class _UpdaterPageState extends State<UpdaterPage>
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Tippe „Verbindung testen", um die Dienste auf dem Pi zu '
+                  'Tippe „Verbindung herstellen", um die Dienste auf dem Pi zu '
                   'erkennen.',
                   style: TextStyle(color: cs.onSurfaceVariant),
                 ),
@@ -1236,6 +1322,18 @@ class _UpdaterPageState extends State<UpdaterPage>
                     _CardAction('DNS neustarten', _piholeRestartDns),
                   ]
                 : const [],
+          ));
+        case 'homeassistant':
+          cards.add(_ServiceCard(
+            status: s,
+            icon: Icons.cottage_outlined,
+            enabled: !_busy,
+            primaryLabel:
+                s.installed ? 'Aktualisieren' : 'Home Assistant installieren',
+            onPrimary:
+                s.installed ? _updateHomeAssistant : _installHomeAssistant,
+            onOpenWeb: s.installed ? _openHomeAssistant : null,
+            actions: const [],
           ));
         case 'system':
           cards.add(_ServiceCard(

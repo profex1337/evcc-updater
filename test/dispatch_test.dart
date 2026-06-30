@@ -52,6 +52,7 @@ class FakeEvccUpdater extends EvccUpdater {
 
   int runCalls = 0, dockerCalls = 0, backupCalls = 0, forgetCalls = 0;
   int piholeUpdateCalls = 0, systemUpgradeCalls = 0;
+  int haInstallCalls = 0, haUpdateCalls = 0;
   SshConfig? forgotConfig;
 
   @override
@@ -123,6 +124,20 @@ class FakeEvccUpdater extends EvccUpdater {
     required void Function(String line) onLog,
   }) async =>
       systemUpgradeCalls++;
+
+  @override
+  Future<void> installHomeAssistant({
+    required SshConfig config,
+    required void Function(String line) onLog,
+  }) async =>
+      haInstallCalls++;
+
+  @override
+  Future<void> updateHomeAssistant({
+    required SshConfig config,
+    required void Function(String line) onLog,
+  }) async =>
+      haUpdateCalls++;
 }
 
 final _noUpdateChecker =
@@ -151,9 +166,10 @@ void main() {
         ),
       );
 
-  // Run a connection test → populates the service cards.
+  // Establish the connection → populates the service cards.
   Future<void> detect(WidgetTester tester) async {
-    await tester.tap(find.widgetWithText(OutlinedButton, 'Verbindung testen'));
+    await tester
+        .tap(find.widgetWithText(OutlinedButton, 'Verbindung herstellen'));
     await tester.pumpAndSettle();
   }
 
@@ -163,7 +179,7 @@ void main() {
     await tester.pumpWidget(page(FakeEvccUpdater()));
     await tester.pumpAndSettle();
 
-    expect(find.text('Verbindung testen'), findsOneWidget);
+    expect(find.text('Verbindung herstellen'), findsOneWidget);
     await detect(tester);
 
     expect(find.text('Verbunden'), findsOneWidget);
@@ -182,6 +198,82 @@ void main() {
     await detect(tester);
 
     expect(find.text('Keine Verbindung'), findsWidgets);
+  });
+
+  testWidgets("switching the Pi profile clears the previous Pi's cards",
+      (tester) async {
+    useTallScreen(tester);
+    const cfg = AppConfig(
+      profiles: [
+        Profile(name: 'S', host: '192.168.178.64', password: 'pw'),
+        Profile(name: 'Eltern', host: '10.0.0.9', password: 'pw'),
+      ],
+      activeIndex: 0,
+    );
+    await tester.pumpWidget(MaterialApp(
+      home: UpdaterPage(
+        store: _FakeStore(cfg),
+        updater: FakeEvccUpdater(),
+        updateChecker: _noUpdateChecker,
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    await detect(tester); // connect → cards for the active Pi
+    expect(find.text('System (Pi)'), findsOneWidget);
+
+    await tester.tap(find.text('Eltern')); // switch to the other Pi
+    await tester.pumpAndSettle();
+
+    // The previous Pi's cards must be gone until the user reconnects.
+    expect(find.text('System (Pi)'), findsNothing);
+    expect(find.text('Verbindung herstellen'), findsOneWidget);
+  });
+
+  testWidgets('Home Assistant card "Aktualisieren" updates the container',
+      (tester) async {
+    useTallScreen(tester);
+    final u = FakeEvccUpdater()
+      ..services = const [
+        ServiceStatus(
+            id: 'homeassistant',
+            name: 'Home Assistant',
+            installed: true,
+            version: 'stable',
+            active: true,
+            detail: 'Docker · homeassistant'),
+      ];
+    await tester.pumpWidget(page(u));
+    await tester.pumpAndSettle();
+    await detect(tester);
+
+    expect(find.text('Home Assistant'), findsOneWidget);
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Aktualisieren'));
+    await tester.pumpAndSettle();
+
+    expect(u.haUpdateCalls, 1);
+  });
+
+  testWidgets('Home Assistant card installs when the service is absent',
+      (tester) async {
+    useTallScreen(tester);
+    final u = FakeEvccUpdater()
+      ..services = const [
+        ServiceStatus(
+            id: 'homeassistant', name: 'Home Assistant', installed: false),
+      ];
+    await tester.pumpWidget(page(u));
+    await tester.pumpAndSettle();
+    await detect(tester);
+
+    await tester
+        .tap(find.widgetWithText(OutlinedButton, 'Home Assistant installieren'));
+    await tester.pumpAndSettle();
+    // Install is destructive-ish → confirm dialog.
+    await tester.tap(find.widgetWithText(FilledButton, 'Weiter'));
+    await tester.pumpAndSettle();
+
+    expect(u.haInstallCalls, 1);
   });
 
   testWidgets('evcc card "Aktualisieren" backs up then runs the update',
@@ -252,6 +344,38 @@ void main() {
     await detect(tester);
 
     expect(find.textContaining('neuen Key vertrauen'), findsOneWidget);
+  });
+
+  testWidgets('switching Pi clears a pending host-key trust prompt',
+      (tester) async {
+    useTallScreen(tester);
+    const cfg = AppConfig(
+      profiles: [
+        Profile(name: 'S', host: '192.168.178.64', password: 'pw'),
+        Profile(name: 'Eltern', host: '10.0.0.9', password: 'pw'),
+      ],
+      activeIndex: 0,
+    );
+    final u = FakeEvccUpdater()
+      ..detectError = const EvccUpdateException(
+          UpdateErrorKind.hostKeyChanged, 'Host-Key geändert!');
+    await tester.pumpWidget(MaterialApp(
+      home: UpdaterPage(
+        store: _FakeStore(cfg),
+        updater: u,
+        updateChecker: _noUpdateChecker,
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    await detect(tester); // host-key prompt for the active Pi
+    expect(find.textContaining('neuen Key vertrauen'), findsOneWidget);
+
+    await tester.tap(find.text('Eltern')); // switch to the other Pi
+    await tester.pumpAndSettle();
+
+    // The stale trust prompt (pointed at the previous Pi) must be gone.
+    expect(find.textContaining('neuen Key vertrauen'), findsNothing);
   });
 
   testWidgets('trust-and-retry forgets the key and replays the test',

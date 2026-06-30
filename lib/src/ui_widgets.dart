@@ -170,7 +170,7 @@ class _TestButton extends StatelessWidget {
           width: 16,
           height: 16,
           child: CircularProgressIndicator(strokeWidth: 2));
-      label = 'Teste …';
+      label = 'Verbinde …';
       fg = cs.onSurfaceVariant;
       border = cs.outlineVariant;
     } else if (result == true) {
@@ -187,7 +187,7 @@ class _TestButton extends StatelessWidget {
       border = cs.error.withValues(alpha: 0.55);
     } else {
       icon = Icon(Icons.wifi_tethering, size: 18, color: cs.onSurfaceVariant);
-      label = 'Verbindung testen';
+      label = 'Verbindung herstellen';
       fg = cs.onSurfaceVariant;
       border = cs.outlineVariant;
     }

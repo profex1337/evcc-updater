@@ -18,19 +18,22 @@ testen" erkennt automatisch, was läuft, und zeigt pro Dienst eine Karte:
 
 ## Funktionen
 
-- **Dienste auto-erkennen** — „Verbindung testen" findet evcc, Pi-hole und das
-  System in *einer* SSH-Sitzung und zeigt pro Dienst eine Karte (Status, Version,
-  Aktualisieren/Installieren, „Oberfläche öffnen").
+- **Dienste auto-erkennen** — „Verbindung herstellen" findet evcc, Pi-hole,
+  Home Assistant und das System in *einer* SSH-Sitzung und zeigt pro Dienst eine
+  Karte (Status, Version, Aktualisieren/Installieren, „Oberfläche öffnen").
 - **evcc aktualisieren** — erkennt automatisch, ob evcc als **apt-Paket**
   oder im **Docker-Container** läuft, und nimmt den passenden Weg.
 - **Pi-hole** — aktualisieren (`pihole -up`), Blocklisten erneuern (`pihole -g`),
   DNS neustarten, installieren (experimentell), `/admin` öffnen.
+- **Home Assistant** — als **Docker-Container** installieren (installiert bei
+  Bedarf zuerst Docker, experimentell) und aktualisieren (Image-Pull + Neuanlage,
+  Daten im `/config`-Volume bleiben erhalten), Web-UI auf Port 8123 öffnen.
 - **System** — alle Pakete aktualisieren (`apt full-upgrade`), Pi neustarten.
 - **Probelauf** (`--dry-run`) — zeigt gefahrlos, ob ein Update verfügbar ist.
 - **Backup vor Update** — sichert vor einem apt-Update automatisch `evcc.yaml` +
   die Datenbank als zeitgestempeltes Archiv auf dem Pi (abschaltbar); schlägt es
   fehl, wird der Fehler angezeigt und das Update gestoppt.
-- **Verbindung testen** — Host/Zugang in Sekunden prüfen, ohne etwas zu ändern.
+- **Verbindung herstellen** — Host/Zugang in Sekunden prüfen, ohne etwas zu ändern.
 - **evcc installieren** auf einem frischen Pi (offizielles apt-Repo).
 - **evcc-Status (Live)** — liest die aktuellen Werte direkt aus der evcc-Web-API
   (PV, Netz, Hausverbrauch, Batterie, Ladepunkte), rein lesend.
@@ -77,7 +80,7 @@ ihn passend zum Setup:
 
 Docker-Befehle laufen bei Bedarf automatisch über `sudo`.
 
-Mit **„Verbindung testen"** prüfst du in Sekunden, ob Host/Port/Benutzer/Zugang
+Mit **„Verbindung herstellen"** prüfst du in Sekunden, ob Host/Port/Benutzer/Zugang
 stimmen: die App verbindet, erkennt die Installationsart (apt/Docker) und
 meldet Version bzw. Container — **ohne irgendetwas zu verändern**.
 

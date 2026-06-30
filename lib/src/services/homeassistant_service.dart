@@ -1,0 +1,96 @@
+/// Home Assistant service. HA runs here as a Docker **container** — the only
+/// flavour you can add to an already-busy multi-service Pi over SSH (HA OS and
+/// HA Supervised would take over the whole box). Command strings + pure parsers
+/// live here; the SSH orchestration is in evcc_updater.dart. See
+/// design/2026-06-30-multi-service.md.
+library;
+
+/// Official container image (rolling "stable" channel).
+const String homeAssistantImage =
+    'ghcr.io/home-assistant/home-assistant:stable';
+
+/// Web UI / onboarding port.
+const int homeAssistantPort = 8123;
+
+/// Conventional container name the install script creates.
+const String homeAssistantContainerName = 'homeassistant';
+
+/// A detected Home Assistant Docker container.
+class HomeAssistantContainer {
+  final String name;
+  final String image;
+  const HomeAssistantContainer({required this.name, required this.image});
+
+  /// The image tag (e.g. "stable", "2024.6"), or the full image when untagged.
+  String get version {
+    if (image.contains('@')) return 'digest-pinned'; // …@sha256:<hex>
+    final i = image.lastIndexOf(':');
+    if (i < 0) return image;
+    final tag = image.substring(i + 1);
+    // A '/' after the last ':' means it was a registry port, not a tag.
+    return tag.contains('/') ? image : tag;
+  }
+}
+
+final _haImage = RegExp(r'home[-_]?assistant', caseSensitive: false);
+
+/// Finds the Home Assistant container in
+/// `docker ps --format '{{.Names}}|{{.Image}}'` output. Matches by image
+/// (…home-assistant…) or by a conventional container name. Returns null when
+/// no HA container is running.
+HomeAssistantContainer? parseHomeAssistant(String dockerPs) {
+  for (final line in dockerPs.split('\n')) {
+    final t = line.trim();
+    if (t.isEmpty || !t.contains('|')) continue;
+    final parts = t.split('|');
+    final name = parts[0].trim();
+    final image = parts.length > 1 ? parts[1].trim() : '';
+    if (image.isEmpty) continue;
+    final isHa = _haImage.hasMatch(image) ||
+        name == 'homeassistant' ||
+        name == 'hass' ||
+        name == 'home-assistant';
+    if (isHa) return HomeAssistantContainer(name: name, image: image);
+  }
+  return null;
+}
+
+/// Root/bash script for an unattended Home Assistant **Container** install (run
+/// via the sudo shell). Installs Docker via the official convenience script if
+/// it is missing, then starts the official image with the recommended flags
+/// (host network, privileged for hardware, config bind mount, dbus). Idempotent:
+/// a pre-existing `homeassistant` container is left untouched. Experimental —
+/// the user finishes onboarding in the browser on port 8123.
+String buildHomeAssistantInstallScript() {
+  return r'''
+set -e
+export DEBIAN_FRONTEND=noninteractive
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Docker nicht gefunden - installiere Docker (get.docker.com) ..."
+  setup=$(mktemp)
+  curl -fsSL https://get.docker.com -o "$setup"
+  sh "$setup"
+  rm -f "$setup"
+fi
+mkdir -p /opt/homeassistant/config
+if docker ps -a --format '{{.Names}}' | grep -qx homeassistant; then
+  if [ "$(docker inspect -f '{{.State.Running}}' homeassistant 2>/dev/null)" = "true" ]; then
+    echo "Container 'homeassistant' laeuft bereits - nichts zu tun."
+  else
+    echo "Container 'homeassistant' existiert (gestoppt) - starte ihn."
+    docker start homeassistant
+  fi
+  exit 0
+fi
+docker run -d \
+  --name homeassistant \
+  --restart=unless-stopped \
+  --privileged \
+  -e TZ=Europe/Berlin \
+  -v /opt/homeassistant/config:/config \
+  -v /run/dbus:/run/dbus:ro \
+  --network=host \
+  ghcr.io/home-assistant/home-assistant:stable
+echo "Home Assistant gestartet. Einrichtung im Browser unter Port 8123."
+''';
+}
