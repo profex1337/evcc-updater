@@ -162,7 +162,10 @@ void main() {
 
     await tester.tap(find.byType(PopupMenuButton<String>));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Pi im Netzwerk suchen'));
+    // Tap the ⋮-menu entry specifically (the prominent scan button shows the
+    // same text while the host is empty).
+    await tester.tap(
+        find.widgetWithText(PopupMenuItem<String>, 'Pi im Netzwerk suchen'));
     await tester.pumpAndSettle();
 
     // Results sheet lists the host; tapping it adopts the IP.
@@ -171,6 +174,36 @@ void main() {
     await tester.pump(const Duration(seconds: 1)); // drain the auto-save debounce
 
     expect(store.saved.active.host, '192.168.178.50');
+  });
+
+  testWidgets('offers a prominent network scan when no host is set yet',
+      (tester) async {
+    useTallScreen(tester);
+    final store = _FakeStore(); // fresh config → empty host
+    await tester.pumpWidget(MaterialApp(
+      home: UpdaterPage(
+        store: store,
+        updateChecker: _noUpdateChecker,
+        piFinder: () async => ['192.168.178.77'],
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    // The button is shown because the host is empty (first start / new Pi).
+    final scanButton =
+        find.widgetWithText(OutlinedButton, 'Pi im Netzwerk suchen');
+    expect(scanButton, findsOneWidget);
+
+    await tester.tap(scanButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('192.168.178.77')); // adopt the result
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 1)); // drain auto-save debounce
+
+    expect(store.saved.active.host, '192.168.178.77');
+    // Once a host is set, the prominent button disappears.
+    expect(find.widgetWithText(OutlinedButton, 'Pi im Netzwerk suchen'),
+        findsNothing);
   });
 
   testWidgets('evcc-Status sheet renders live values from the API',

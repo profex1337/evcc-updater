@@ -44,7 +44,9 @@ testen" erkennt automatisch, was läuft, und zeigt pro Dienst eine Karte:
 - **evcc-Status (Live)** — liest die aktuellen Werte direkt aus der evcc-Web-API
   (PV, Netz, Hausverbrauch, Batterie, Ladepunkte), rein lesend.
 - **Pi im Netzwerk suchen** — findet im selben WLAN Geräte mit offenem
-  SSH-Port und übernimmt die IP per Tippen.
+  SSH-Port und übernimmt die IP per Tippen. Wird beim ersten Start und nach
+  „Profil hinzufügen" (solange noch kein Host eingetragen ist) prominent als
+  Knopf angeboten; sonst jederzeit über das ⋮-Menü.
 - **Updates im Hintergrund** — lange Aktionen (Update/Installation) laufen über
   einen Vordergrunddienst weiter, auch wenn du die App in den Hintergrund legst
   oder den Bildschirm ausschaltest (Benachrichtigung „Pi-Tool …").

@@ -1604,6 +1604,24 @@ class _UpdaterPageState extends State<UpdaterPage>
                 _scheduleSave();
               },
             ),
+            // No host yet (first start, or a freshly added profile) → offer a
+            // prominent network scan. Rebuilds live as the host field changes.
+            ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _host,
+              builder: (context, value, _) {
+                if (value.text.trim().isNotEmpty) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: OutlinedButton.icon(
+                    onPressed: _busy ? null : _findPi,
+                    icon: const Icon(Icons.wifi_find, size: 18),
+                    label: const Text('Pi im Netzwerk suchen'),
+                    style: OutlinedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(44)),
+                  ),
+                );
+              },
+            ),
             const SizedBox(height: 12),
             ..._serviceCards(),
             if (_statusMessage != null) ...[
