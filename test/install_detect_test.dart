@@ -320,4 +320,36 @@ void main() {
       expect(script, contains('||'));
     });
   });
+
+  group('parseBackupList', () {
+    test('lists .tar.gz archive paths, newest first, ignoring noise', () {
+      const out = '/var/backups/evcc/evcc-backup-20260630-120000.tar.gz\n'
+          '/var/backups/evcc/evcc-backup-20260628-090000.tar.gz\n';
+      final list = parseBackupList(out);
+      expect(list, [
+        '/var/backups/evcc/evcc-backup-20260630-120000.tar.gz',
+        '/var/backups/evcc/evcc-backup-20260628-090000.tar.gz',
+      ]);
+    });
+    test('empty when there are no backups', () {
+      expect(parseBackupList(''), isEmpty);
+      expect(parseBackupList('ls: cannot access: No such file'), isEmpty);
+    });
+  });
+
+  group('buildRestoreScript', () {
+    test('stops evcc, extracts the archive to /, restarts evcc', () {
+      final s =
+          buildRestoreScript('/var/backups/evcc/evcc-backup-20260630.tar.gz');
+      expect(s, contains('systemctl stop evcc'));
+      expect(s,
+          contains("tar -xzf '/var/backups/evcc/evcc-backup-20260630.tar.gz' -C /"));
+      expect(s, contains('systemctl start evcc'));
+    });
+    test('single-quotes the path so it cannot break out of the shell', () {
+      final s = buildRestoreScript("/var/backups/evcc/x';reboot;'.tar.gz");
+      expect(s, contains(r"'\''")); // the quote was escaped, not left to close
+      expect(s, isNot(contains("x';reboot"))); // no unescaped breakout
+    });
+  });
 }

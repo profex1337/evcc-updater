@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:evcc_updater/main.dart';
 import 'package:evcc_updater/src/commands.dart';
 import 'package:evcc_updater/src/evcc_updater.dart';
@@ -42,6 +44,8 @@ class FakeEvccUpdater extends EvccUpdater {
         detail: 'aktuell'),
   ];
   Object? detectError; // thrown by detect* (e.g. hostKeyChanged)
+  Completer<void>? detectGate; // if set, detectServices awaits it (stay busy)
+  int cancelCalls = 0;
   InstallDetection detection = const InstallDetection(
       kind: InstallKind.apt, aptVersion: '0.310.0', serviceActive: true);
   UpdateSummary summary = const UpdateSummary(
@@ -62,8 +66,33 @@ class FakeEvccUpdater extends EvccUpdater {
     required void Function(String line) onLog,
     bool allowSudoForDocker = true,
   }) async {
+    if (detectGate != null) await detectGate!.future;
     if (detectError != null) throw detectError!;
     return services;
+  }
+
+  @override
+  Future<void> cancel() async => cancelCalls++;
+
+  List<String> backups = const [];
+  int restoreCalls = 0;
+  String? restoredPath;
+
+  @override
+  Future<List<String>> listBackups({
+    required SshConfig config,
+    required void Function(String line) onLog,
+  }) async =>
+      backups;
+
+  @override
+  Future<void> restoreBackup({
+    required SshConfig config,
+    required String path,
+    required void Function(String line) onLog,
+  }) async {
+    restoreCalls++;
+    restoredPath = path;
   }
 
   @override
@@ -324,6 +353,88 @@ void main() {
     expect(ka.beginCount, 1);
     expect(ka.endCount, 1);
     expect(ka.lastMessage, contains('Update'));
+  });
+
+  testWidgets('Abbrechen appears while busy and cancels the connection',
+      (tester) async {
+    useTallScreen(tester);
+    final gate = Completer<void>();
+    final u = FakeEvccUpdater()..detectGate = gate;
+    await tester.pumpWidget(page(u));
+    await tester.pumpAndSettle();
+
+    // Start connecting; detectServices hangs on the gate, so it stays busy.
+    await tester
+        .tap(find.widgetWithText(OutlinedButton, 'Verbindung herstellen'));
+    await tester.pump();
+
+    expect(find.widgetWithText(OutlinedButton, 'Abbrechen'), findsOneWidget);
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Abbrechen'));
+    await tester.pump();
+    expect(u.cancelCalls, 1);
+
+    gate.complete(); // release the pending future so the test settles cleanly
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('an up-to-date service shows "Aktuell", update moves to ⋮',
+      (tester) async {
+    useTallScreen(tester);
+    final u = FakeEvccUpdater()
+      ..services = const [
+        ServiceStatus(
+            id: 'evcc',
+            name: 'evcc',
+            installed: true,
+            version: '0.310.0',
+            active: true,
+            updateAvailable: false,
+            updateKnown: true,
+            detail: 'apt · Dienst aktiv'),
+      ];
+    await tester.pumpWidget(page(u));
+    await tester.pumpAndSettle();
+    await detect(tester);
+
+    expect(find.widgetWithText(OutlinedButton, 'Aktuell'), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, 'Aktualisieren'), findsNothing);
+
+    await tester.tap(find.byType(PopupMenuButton<int>).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Trotzdem aktualisieren'));
+    await tester.pumpAndSettle();
+
+    expect(u.runCalls, 1); // forced update still works
+  });
+
+  testWidgets('evcc ⋮ → Backup wiederherstellen lists, picks and restores',
+      (tester) async {
+    useTallScreen(tester);
+    final u = FakeEvccUpdater()
+      ..backups = const [
+        '/var/backups/evcc/evcc-backup-20260630-120000.tar.gz'
+      ];
+    await tester.pumpWidget(page(u));
+    await tester.pumpAndSettle();
+    await detect(tester);
+
+    await tester.tap(find.byType(PopupMenuButton<int>).first); // evcc card ⋮
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Backup wiederherstellen'));
+    await tester.pumpAndSettle();
+
+    // The picker shows the formatted timestamp; choose it.
+    expect(find.text('30.06.2026 12:00 Uhr'), findsOneWidget);
+    await tester.tap(find.text('30.06.2026 12:00 Uhr'));
+    await tester.pumpAndSettle();
+
+    // Destructive → confirm.
+    await tester.tap(find.widgetWithText(FilledButton, 'Weiter'));
+    await tester.pumpAndSettle();
+
+    expect(u.restoreCalls, 1);
+    expect(u.restoredPath,
+        '/var/backups/evcc/evcc-backup-20260630-120000.tar.gz');
   });
 
   testWidgets('a dry-run (Probelauf) does NOT start the keep-alive',

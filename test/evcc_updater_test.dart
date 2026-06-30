@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -84,6 +85,32 @@ class FakeSshRunner implements SshRunner {
 
 EvccUpdater _updaterWith(FakeSshRunner runner) =>
     EvccUpdater(runnerFactory: (_) => runner);
+
+/// A runner whose [run] never completes on its own — it hangs until [close]
+/// is called (as a real connection would when cancelled mid-command).
+class _HangingRunner implements SshRunner {
+  final runStarted = Completer<void>();
+  final _gate = Completer<CommandResult>();
+  bool closed = false;
+
+  @override
+  Future<void> connect() async {}
+
+  @override
+  Future<CommandResult> run(String command,
+      {String? stdin, void Function(String chunk)? onOutput}) {
+    if (!runStarted.isCompleted) runStarted.complete();
+    return _gate.future;
+  }
+
+  @override
+  Future<void> close() async {
+    closed = true;
+    if (!_gate.isCompleted) {
+      _gate.completeError(const SocketException('connection closed'));
+    }
+  }
+}
 
 FakeSshRunner _happyRunner() => FakeSshRunner({
       _vQuery: [_r('0.310.0\n'), _r('0.311.0\n')],
@@ -546,6 +573,59 @@ void main() {
     });
   });
 
+  group('EvccUpdater backup restore', () {
+    test('listBackups parses the archive paths newest-first', () async {
+      final runner = FakeSshRunner({
+        listBackupsCommand: [
+          _r('/var/backups/evcc/evcc-backup-20260630-120000.tar.gz\n'
+              '/var/backups/evcc/evcc-backup-20260628-090000.tar.gz\n')
+        ],
+      });
+      final list =
+          await _updaterWith(runner).listBackups(config: _config, onLog: (_) {});
+      expect(list.first, endsWith('20260630-120000.tar.gz'));
+      expect(list.length, 2);
+    });
+
+    test('restoreBackup runs the restore as root with the chosen archive',
+        () async {
+      const path = '/var/backups/evcc/evcc-backup-20260630-120000.tar.gz';
+      final runner = FakeSshRunner({installShellCommand: [_r('Wiederhergestellt.')]});
+      await _updaterWith(runner)
+          .restoreBackup(config: _config, path: path, onLog: (_) {});
+      final stdin = runner.stdinByCommand[installShellCommand]!;
+      expect(stdin, startsWith('sekret\n'));
+      expect(stdin, contains("tar -xzf '$path' -C /"));
+      expect(stdin, contains('systemctl start evcc'));
+    });
+
+    test('restoreBackup rejects a path outside the backup dir', () async {
+      final runner = FakeSshRunner({});
+      await expectLater(
+        _updaterWith(runner).restoreBackup(
+            config: _config, path: '/etc/passwd', onLog: (_) {}),
+        throwsA(isA<EvccUpdateException>()),
+      );
+      expect(runner.commandsRun, isEmpty); // never connected/ran anything
+    });
+  });
+
+  group('EvccUpdater.cancel', () {
+    test('closes the connection and surfaces a cancelled error', () async {
+      final runner = _HangingRunner();
+      final updater = EvccUpdater(runnerFactory: (_) => runner);
+      final f = updater.detectServices(config: _config, onLog: (_) {});
+      await runner.runStarted.future; // a command is now in flight
+      await updater.cancel();
+      await expectLater(
+        f,
+        throwsA(isA<EvccUpdateException>()
+            .having((e) => e.kind, 'kind', UpdateErrorKind.cancelled)),
+      );
+      expect(runner.closed, isTrue);
+    });
+  });
+
   group('EvccUpdater.detectServices', () {
     test('detects evcc(apt) + Pi-hole + System in one pass', () async {
       final runner = FakeSshRunner({
@@ -563,11 +643,35 @@ void main() {
 
       expect(byId['evcc']!.installed, isTrue);
       expect(byId['evcc']!.version, '0.310.0');
+      // apt-evcc currency is known; this sim has no "Inst evcc" line.
+      expect(byId['evcc']!.updateKnown, isTrue);
+      expect(byId['evcc']!.updateAvailable, isFalse);
       expect(byId['pihole']!.installed, isTrue);
       expect(byId['pihole']!.version, 'v6.0.4');
       expect(byId['pihole']!.updateAvailable, isTrue);
       expect(byId['system']!.version, contains('Debian'));
       expect(byId['system']!.updateAvailable, isTrue);
+    });
+
+    test('evcc(apt) shows an update when the apt sim would upgrade it',
+        () async {
+      final runner = FakeSshRunner({
+        _vQuery: [_r('0.310.0\n')],
+        _svc: [_r('active\n')],
+        systemPendingCommand: [
+          _r('Inst evcc [0.310.0] (0.311.0 evcc:armhf [armhf])\n'
+              'Conf evcc (0.311.0 evcc:armhf [armhf])\n'
+              '1 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.')
+        ],
+        piholeVersionCommand: [_r('')],
+        systemOsCommand: [_r('PRETTY_NAME="Debian GNU/Linux 12"')],
+      });
+
+      final list =
+          await _updaterWith(runner).detectServices(config: _config, onLog: (_) {});
+      final evcc = list.firstWhere((s) => s.id == 'evcc');
+      expect(evcc.updateKnown, isTrue);
+      expect(evcc.updateAvailable, isTrue);
     });
 
     test('Pi-hole reported absent when not installed', () async {

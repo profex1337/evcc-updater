@@ -497,7 +497,8 @@ class _UpdaterPageState extends State<UpdaterPage>
     try {
       await body();
     } on EvccUpdateException catch (e) {
-      _appendLog('FEHLER: ${e.message}');
+      final cancelled = e.kind == UpdateErrorKind.cancelled;
+      _appendLog(cancelled ? 'Abgebrochen.' : 'FEHLER: ${e.message}');
       if (!mounted) return;
       setState(() {
         _statusMessage = e.message;
@@ -734,6 +735,83 @@ class _UpdaterPageState extends State<UpdaterPage>
     });
   }
 
+  /// Lists the evcc backups on the Pi, lets the user pick one, confirms, then
+  /// restores it (stops evcc → extract → restart). Backups are made before apt
+  /// updates (see the backup-before-update setting).
+  Future<void> _restoreBackup() async {
+    if (_busy) return;
+    final config = _prepare();
+    if (config == null) return;
+    List<String>? backups; // stays null if listing errored (surfaced by _guard)
+    await _guard(() async {
+      backups = await _updater.listBackups(config: config, onLog: _appendLog);
+    });
+    if (!mounted || backups == null) return;
+    if (backups!.isEmpty) {
+      _snack('Keine evcc-Backups auf dem Pi gefunden.');
+      return;
+    }
+    final chosen = await _pickBackup(backups!);
+    if (chosen == null || !mounted) return;
+    if (!await _confirm(
+      'Backup wiederherstellen?',
+      'Überschreibt die aktuelle evcc-Konfiguration + Datenbank mit dem Stand '
+          'vom ${_backupLabel(chosen)} und startet evcc neu.',
+    )) {
+      return;
+    }
+    _beginBusy();
+    _lastAction = _restoreBackup;
+    await _guard(() async {
+      await _updater.restoreBackup(
+          config: config, path: chosen, onLog: _appendLog);
+      if (!mounted) return;
+      setState(() {
+        _statusMessage = 'Backup wiederhergestellt (${_backupLabel(chosen)}).';
+        _statusOk = true;
+      });
+      _addHistory('Backup wiederhergestellt: ${_backupLabel(chosen)}.');
+      await _refreshServices(config);
+    }, backgroundMessage: 'Backup wird wiederhergestellt …');
+  }
+
+  /// Human label for a backup archive path
+  /// (.../evcc-backup-YYYYMMDD-HHMMSS.tar.gz → "DD.MM.YYYY HH:MM Uhr").
+  String _backupLabel(String path) {
+    final m = RegExp(r'(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})')
+        .firstMatch(path);
+    if (m == null) return path.split('/').last;
+    return '${m[3]}.${m[2]}.${m[1]} ${m[4]}:${m[5]} Uhr';
+  }
+
+  Future<String?> _pickBackup(List<String> backups) {
+    return showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            ListTile(
+              title: Text('Backup wiederherstellen',
+                  style: Theme.of(ctx).textTheme.titleMedium),
+              subtitle: const Text('Neuestes zuerst'),
+            ),
+            for (final b in backups)
+              ListTile(
+                leading: const Icon(Icons.restore),
+                title: Text(_backupLabel(b)),
+                subtitle: Text(b,
+                    style: const TextStyle(
+                        fontFamily: 'monospace', fontSize: 11)),
+                onTap: () => Navigator.pop(ctx, b),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   // ---- Pi-hole + System service actions ----
 
   Future<void> _updatePihole() async {
@@ -895,6 +973,13 @@ class _UpdaterPageState extends State<UpdaterPage>
       return;
     }
     _openUrl('http://${_host.text.trim()}:8123');
+  }
+
+  /// Cancels the in-flight action by closing its SSH connection; the running
+  /// action then finishes as "Abgebrochen".
+  Future<void> _cancel() async {
+    _appendLog('Abbrechen angefordert …');
+    await _updater.cancel();
   }
 
   /// Re-trust a changed host key, then retry the action that hit it.
@@ -1304,6 +1389,9 @@ class _UpdaterPageState extends State<UpdaterPage>
     }
     final cards = <Widget>[];
     for (final s in _services) {
+      // Known up to date → the primary becomes a disabled "Aktuell"; a forced
+      // update is offered in the ⋮ menu instead.
+      final upToDate = s.installed && s.updateKnown && !s.updateAvailable;
       switch (s.id) {
         case 'evcc':
           cards.add(_ServiceCard(
@@ -1315,11 +1403,15 @@ class _UpdaterPageState extends State<UpdaterPage>
             onOpenWeb: s.installed ? _openEvccUi : null,
             actions: s.installed
                 ? [
+                    if (upToDate)
+                      _CardAction(
+                          'Trotzdem aktualisieren', () => _run(dryRun: false)),
                     _CardAction(
                         'Probelauf (ändert nichts)', () => _run(dryRun: true)),
                     _CardAction('Live-Status', _showApiStatus),
                     _CardAction('Dienst neustarten', _restartService),
                     _CardAction('Status / Logs anzeigen', _showStatus),
+                    _CardAction('Backup wiederherstellen', _restoreBackup),
                   ]
                 : const [],
           ));
@@ -1333,6 +1425,8 @@ class _UpdaterPageState extends State<UpdaterPage>
             onOpenWeb: s.installed ? _openPiholeAdmin : null,
             actions: s.installed
                 ? [
+                    if (upToDate)
+                      _CardAction('Trotzdem aktualisieren', _updatePihole),
                     _CardAction('Blocklisten aktualisieren', _piholeGravity),
                     _CardAction('DNS neustarten', _piholeRestartDns),
                   ]
@@ -1357,7 +1451,11 @@ class _UpdaterPageState extends State<UpdaterPage>
             enabled: !_busy,
             primaryLabel: 'Updates installieren',
             onPrimary: _upgradeSystem,
-            actions: [_CardAction('Pi neustarten', _reboot)],
+            actions: [
+              if (upToDate)
+                _CardAction('Trotzdem aktualisieren', _upgradeSystem),
+              _CardAction('Pi neustarten', _reboot),
+            ],
           ));
       }
     }
@@ -1458,6 +1556,25 @@ class _UpdaterPageState extends State<UpdaterPage>
               enabled: !_busy,
               onTap: _testConnection,
             ),
+            if (_busy) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  onPressed: _cancel,
+                  icon: const Icon(Icons.close, size: 18),
+                  label: const Text('Abbrechen'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: theme.colorScheme.error,
+                    side: BorderSide(
+                        color: theme.colorScheme.error.withValues(alpha: 0.55)),
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 8),
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 8),
             if (_update != null) ...[
               _UpdateBanner(

@@ -248,6 +248,12 @@ class _ServiceCard extends StatelessWidget {
         .bodySmall
         ?.copyWith(fontFamily: 'monospace', color: cs.onSurfaceVariant);
 
+    // Known up to date → show a disabled "Aktuell ✓" instead of "Aktualisieren"
+    // (a forced update stays available via the ⋮ menu). When currency is
+    // unknown (Docker evcc / Home Assistant) we keep offering "Aktualisieren".
+    final upToDate =
+        status.installed && status.updateKnown && !status.updateAvailable;
+
     // Status LED: not installed → grey; update → amber; active → green;
     // installed-but-inactive → red.
     final Color led;
@@ -321,12 +327,21 @@ class _ServiceCard extends StatelessWidget {
             child: Row(
               children: [
                 Expanded(
-                  child: OutlinedButton(
-                    onPressed: enabled ? onPrimary : null,
-                    style: OutlinedButton.styleFrom(
-                        minimumSize: const Size.fromHeight(42)),
-                    child: Text(primaryLabel),
-                  ),
+                  child: upToDate
+                      ? OutlinedButton.icon(
+                          onPressed: null,
+                          icon: const Icon(Icons.check_circle_outline,
+                              size: 18, color: kGreen),
+                          label: const Text('Aktuell'),
+                          style: OutlinedButton.styleFrom(
+                              minimumSize: const Size.fromHeight(42)),
+                        )
+                      : OutlinedButton(
+                          onPressed: enabled ? onPrimary : null,
+                          style: OutlinedButton.styleFrom(
+                              minimumSize: const Size.fromHeight(42)),
+                          child: Text(primaryLabel),
+                        ),
                 ),
                 if (onOpenWeb != null) ...[
                   const SizedBox(width: 8),

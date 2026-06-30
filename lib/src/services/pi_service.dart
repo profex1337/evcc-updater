@@ -19,8 +19,15 @@ class ServiceStatus {
   /// [installed].
   final bool active;
 
-  /// A newer version / pending updates exist.
+  /// A newer version / pending updates exist. Only meaningful when
+  /// [updateKnown] is true.
   final bool updateAvailable;
+
+  /// Whether the app actually determined update availability for this service.
+  /// True for apt-evcc / Pi-hole / System (we check); false where we can't know
+  /// cheaply (Docker-based evcc / Home Assistant), so the UI keeps offering a
+  /// plain "Aktualisieren" instead of claiming it is up to date.
+  final bool updateKnown;
 
   /// Short human status line (mono), e.g. "Dienst aktiv" or "3 Updates".
   final String detail;
@@ -32,6 +39,7 @@ class ServiceStatus {
     this.version,
     this.active = false,
     this.updateAvailable = false,
+    this.updateKnown = false,
     this.detail = '',
   });
 

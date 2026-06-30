@@ -22,6 +22,7 @@ enum UpdateErrorKind {
   serviceInactive,
   packageMissing,
   hostKeyChanged,
+  cancelled,
   unknown,
 }
 
@@ -76,7 +77,24 @@ class EvccUpdater {
   /// instance is wired into the real runner so reads/writes stay consistent.
   final HostKeyStore? hostKeyStore;
 
-  const EvccUpdater({required this.runnerFactory, this.hostKeyStore});
+  EvccUpdater({required this.runnerFactory, this.hostKeyStore});
+
+  /// The connection of the action currently in flight, so [cancel] can close
+  /// it. Set in [_withConnection]; null between actions. Actions are serialized
+  /// by the UI (one at a time), so a single handle is enough.
+  SshRunner? _active;
+  bool _cancelRequested = false;
+
+  /// Cancels the in-flight SSH action by closing its connection. The running
+  /// action then completes with [UpdateErrorKind.cancelled]. No-op when idle.
+  Future<void> cancel() async {
+    _cancelRequested = true;
+    try {
+      await _active?.close();
+    } catch (_) {
+      // Best-effort: closing a half-open connection may itself throw.
+    }
+  }
 
   /// Production updater backed by the real dartssh2 adapter.
   factory EvccUpdater.real() {
@@ -345,6 +363,13 @@ class EvccUpdater {
         }
         final dockerPs = docker.stdout;
 
+        // ---- pending apt upgrades (shared by evcc-apt + System) ----
+        // No sudo: a simulated full-upgrade. Tells the pending count AND which
+        // packages (e.g. evcc) actually have an update in the local index.
+        final pend = await runner.run(systemPendingCommand);
+        final pendingCount = parsePendingUpdates(pend.stdout) ?? 0;
+        final aptUpgrades = parseAptUpgrades(pend.stdout);
+
         // ---- evcc (apt or docker) ----
         final dpkg = await runner.run(versionQuery);
         final aptV = parseInstalledVersion(dpkg.stdout);
@@ -357,6 +382,10 @@ class EvccUpdater {
             installed: true,
             version: aptV,
             active: active,
+            // We know currency from the apt simulation (best-effort: depends on
+            // the local package index being reasonably fresh).
+            updateAvailable: aptUpgrades.contains('evcc'),
+            updateKnown: true,
             detail: 'apt · Dienst ${active ? 'aktiv' : 'inaktiv'}',
           ));
         } else {
@@ -385,6 +414,7 @@ class EvccUpdater {
             version: pver.version,
             active: blocking,
             updateAvailable: pver.updateAvailable,
+            updateKnown: true,
             detail: blocking ? 'Blocking aktiv' : 'Blocking aus',
           ));
         } else {
@@ -405,16 +435,15 @@ class EvccUpdater {
 
         // ---- System (always present) ----
         final os = await runner.run(systemOsCommand);
-        final pend = await runner.run(systemPendingCommand);
-        final n = parsePendingUpdates(pend.stdout) ?? 0;
         out.add(ServiceStatus(
           id: 'system',
           name: 'System (Pi)',
           installed: true,
           version: parseOsPrettyName(os.stdout),
           active: true,
-          updateAvailable: n > 0,
-          detail: n > 0 ? '$n Updates verfügbar' : 'aktuell',
+          updateAvailable: pendingCount > 0,
+          updateKnown: true,
+          detail: pendingCount > 0 ? '$pendingCount Updates verfügbar' : 'aktuell',
         ));
 
         log('Erkannt: ${out.where((s) => s.installed).map((s) => s.name).join(', ')}.');
@@ -856,6 +885,51 @@ class EvccUpdater {
     );
   }
 
+  /// Lists the evcc backup archives present on the Pi, newest first (no sudo).
+  Future<List<String>> listBackups({
+    required SshConfig config,
+    required void Function(String line) onLog,
+  }) {
+    return _withConnection<List<String>>(
+      config: config,
+      onLog: onLog,
+      body: (runner, log) async {
+        final r = await runner.run(listBackupsCommand);
+        final list = parseBackupList(r.stdout);
+        log('${list.length} Backup(s) gefunden.');
+        return list;
+      },
+    );
+  }
+
+  /// Restores a previously created backup [path]: stops evcc, extracts the
+  /// archive back to `/`, restarts evcc. Throws on a rejected sudo password or
+  /// any failure. Rejects a path outside the backup dir as defense-in-depth.
+  Future<void> restoreBackup({
+    required SshConfig config,
+    required String path,
+    required void Function(String line) onLog,
+  }) async {
+    if (!path.startsWith('$evccBackupDir/') || !path.endsWith('.tar.gz')) {
+      throw const EvccUpdateException(
+        UpdateErrorKind.unknown,
+        'Ungültiger Backup-Pfad.',
+      );
+    }
+    return _withConnection<void>(
+      config: config,
+      onLog: onLog,
+      body: (runner, log) async {
+        log('Stelle Backup wieder her: $path …');
+        await _runRootScript(runner, log, config,
+            sudo: true,
+            script: buildRestoreScript(path),
+            failMsg: 'Wiederherstellung fehlgeschlagen');
+        log('Backup wiederhergestellt – evcc neu gestartet.');
+      },
+    );
+  }
+
   /// Restarts the evcc service and verifies it comes back active.
   Future<void> restartService({
     required SshConfig config,
@@ -970,47 +1044,61 @@ class EvccUpdater {
         body,
   }) async {
     final runner = runnerFactory(config);
+    _active = runner;
+    _cancelRequested = false;
     void log(String s) => onLog(redactPassword(s, config.password));
 
     try {
       log('Verbinde mit ${config.username}@${config.host}:${config.port} …');
       await runner.connect();
       return await body(runner, log);
-    } on EvccUpdateException {
-      rethrow;
-    } on HostKeyChangedException catch (e) {
-      throw EvccUpdateException(
-        UpdateErrorKind.hostKeyChanged,
-        'Der SSH-Host-Key von ${e.host} hat sich geändert! Entweder wurde der '
-        'Pi neu aufgesetzt – oder jemand täuscht ihn vor. Aus Sicherheit wurde '
-        'KEIN Passwort gesendet.\nNeuer Fingerprint: ${e.presented}',
-      );
-    } on SSHAuthError {
-      throw const EvccUpdateException(
-        UpdateErrorKind.auth,
-        'Anmeldung fehlgeschlagen – Benutzer/Passwort bzw. SSH-Key prüfen.',
-      );
-    } on SSHKeyDecodeError {
-      throw const EvccUpdateException(
-        UpdateErrorKind.auth,
-        'Privater SSH-Key ungültig oder falsche Passphrase.',
-      );
-    } on SocketException {
-      throw const EvccUpdateException(
-        UpdateErrorKind.connection,
-        'Verbindung fehlgeschlagen – IP/Port korrekt, Pi online im Netz?',
-      );
-    } on TimeoutException {
-      throw const EvccUpdateException(
-        UpdateErrorKind.connection,
-        'Zeitüberschreitung – Pi nicht erreichbar.',
-      );
-    } on SSHError catch (e) {
-      throw EvccUpdateException(UpdateErrorKind.unknown, 'SSH-Fehler: $e');
     } catch (e) {
+      // A user-requested cancel closed the connection mid-action; whatever low
+      // -level error that surfaced (socket/SSH) is reported as a clean cancel.
+      if (_cancelRequested) {
+        throw const EvccUpdateException(
+            UpdateErrorKind.cancelled, 'Abgebrochen.');
+      }
+      if (e is EvccUpdateException) rethrow;
+      if (e is HostKeyChangedException) {
+        throw EvccUpdateException(
+          UpdateErrorKind.hostKeyChanged,
+          'Der SSH-Host-Key von ${e.host} hat sich geändert! Entweder wurde der '
+          'Pi neu aufgesetzt – oder jemand täuscht ihn vor. Aus Sicherheit '
+          'wurde KEIN Passwort gesendet.\nNeuer Fingerprint: ${e.presented}',
+        );
+      }
+      if (e is SSHAuthError) {
+        throw const EvccUpdateException(
+          UpdateErrorKind.auth,
+          'Anmeldung fehlgeschlagen – Benutzer/Passwort bzw. SSH-Key prüfen.',
+        );
+      }
+      if (e is SSHKeyDecodeError) {
+        throw const EvccUpdateException(
+          UpdateErrorKind.auth,
+          'Privater SSH-Key ungültig oder falsche Passphrase.',
+        );
+      }
+      if (e is SocketException) {
+        throw const EvccUpdateException(
+          UpdateErrorKind.connection,
+          'Verbindung fehlgeschlagen – IP/Port korrekt, Pi online im Netz?',
+        );
+      }
+      if (e is TimeoutException) {
+        throw const EvccUpdateException(
+          UpdateErrorKind.connection,
+          'Zeitüberschreitung – Pi nicht erreichbar.',
+        );
+      }
+      if (e is SSHError) {
+        throw EvccUpdateException(UpdateErrorKind.unknown, 'SSH-Fehler: $e');
+      }
       throw EvccUpdateException(
           UpdateErrorKind.unknown, 'Unerwarteter Fehler: $e');
     } finally {
+      _active = null;
       await runner.close();
     }
   }

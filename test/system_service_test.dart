@@ -33,4 +33,21 @@ void main() {
       expect(parsePendingUpdates('Reading package lists...'), isNull);
     });
   });
+
+  group('parseAptUpgrades', () {
+    test('lists the packages a full-upgrade simulation would upgrade', () {
+      const out = 'Reading package lists...\n'
+          'Inst evcc [0.310.0] (0.311.0 evcc:armhf [armhf])\n'
+          'Inst libfoo [1.0] (1.1 Debian:armhf [armhf])\n'
+          'Conf evcc (0.311.0 evcc:armhf [armhf])\n'
+          '2 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.';
+      final pkgs = parseAptUpgrades(out);
+      expect(pkgs, containsAll(['evcc', 'libfoo']));
+      expect(pkgs.length, 2);
+    });
+    test('empty when nothing is upgraded', () {
+      expect(parseAptUpgrades('0 upgraded, 0 newly installed, 0 to remove.'),
+          isEmpty);
+    });
+  });
 }

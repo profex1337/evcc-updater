@@ -485,6 +485,37 @@ if tar -czf "$out" $files; then echo "EVCC_BACKUP_OK $out"; else echo "EVCC_BACK
 ''';
 }
 
+/// Where pre-update evcc backups are written (see [buildBackupScript]).
+const String evccBackupDir = '/var/backups/evcc';
+
+/// Lists existing evcc backups, newest first. No sudo: the dir + archives are
+/// created by root with a standard umask, so they're world-readable.
+const String listBackupsCommand =
+    'ls -1t /var/backups/evcc/*.tar.gz 2>/dev/null';
+
+/// Parses [listBackupsCommand] output into archive paths (newest first).
+List<String> parseBackupList(String lsOutput) => lsOutput
+    .split('\n')
+    .map((l) => l.trim())
+    .where((l) => l.endsWith('.tar.gz'))
+    .toList();
+
+/// Root/bash script (run via [installShellCommand]) that restores [archivePath]:
+/// stop evcc, extract the archive back to `/`, restart evcc. The backup stores
+/// relative paths (tar strips the leading `/`), so `-C /` puts every file back
+/// in its original location (e.g. /etc/evcc.yaml + the database).
+String buildRestoreScript(String archivePath) {
+  final a = shSingleQuote(archivePath);
+  return '''
+set -e
+if [ ! -f $a ]; then echo "Backup nicht gefunden."; exit 1; fi
+systemctl stop evcc 2>/dev/null || true
+tar -xzf $a -C /
+systemctl start evcc
+echo "Wiederhergestellt."
+''';
+}
+
 String _upgradeCommand({required bool fullUpgrade, required bool dryRun}) {
   if (fullUpgrade) {
     return dryRun

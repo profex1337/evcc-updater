@@ -17,6 +17,13 @@ const String systemUptimeCommand = 'uptime -p';
 final _prettyName = RegExp(r'^\s*PRETTY_NAME="?([^"\n]+)"?', multiLine: true);
 final _name = RegExp(r'^\s*NAME="?([^"\n]+)"?', multiLine: true);
 final _upgraded = RegExp(r'(\d+) upgraded');
+final _instLine = RegExp(r'^Inst (\S+)', multiLine: true);
+
+/// Package names an `apt-get -s full-upgrade` simulation would install/upgrade
+/// (the `Inst <pkg> …` lines). Used to tell whether a specific package (e.g.
+/// evcc) actually has a pending update in the local package index.
+Set<String> parseAptUpgrades(String simOutput) =>
+    _instLine.allMatches(simOutput).map((m) => m.group(1)!).toSet();
 
 /// Extracts a friendly OS name from `/etc/os-release` (PRETTY_NAME, else NAME).
 String? parseOsPrettyName(String osRelease) {

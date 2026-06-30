@@ -33,6 +33,12 @@ testen" erkennt automatisch, was läuft, und zeigt pro Dienst eine Karte:
 - **Backup vor Update** — sichert vor einem apt-Update automatisch `evcc.yaml` +
   die Datenbank als zeitgestempeltes Archiv auf dem Pi (abschaltbar); schlägt es
   fehl, wird der Fehler angezeigt und das Update gestoppt.
+- **Backup wiederherstellen** — listet die vorhandenen evcc-Backups auf dem Pi,
+  eines auswählen → evcc stoppen, entpacken, neu starten (mit Sicherheitsabfrage).
+- **„Aktuell"-Anzeige** — bei evcc/Pi-hole/System zeigt die Karte „Aktuell", wenn
+  keine neue Version ansteht (statt „Aktualisieren"); erzwingen geht über das ⋮-Menü.
+- **Abbrechen** — eine laufende Aktion lässt sich abbrechen (schließt die
+  SSH-Verbindung).
 - **Verbindung herstellen** — Host/Zugang in Sekunden prüfen, ohne etwas zu ändern.
 - **evcc installieren** auf einem frischen Pi (offizielles apt-Repo).
 - **evcc-Status (Live)** — liest die aktuellen Werte direkt aus der evcc-Web-API
