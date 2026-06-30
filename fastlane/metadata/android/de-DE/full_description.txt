@@ -1,13 +1,15 @@
-Pi-Tool ist ein inoffizielles Tool für evcc: Es aktualisiert und installiert evcc auf deinem Raspberry Pi – und auf Wunsch gleich den ganzen Pi (alle Pakete) – bequem per SSH, mit einem Knopfdruck. Nicht mit dem evcc-Projekt verbunden.
+Pi-Tool aktualisiert und installiert self-hosted Dienste auf deinem Raspberry Pi – bequem per SSH, mit einem Knopfdruck. „Verbindung testen" erkennt automatisch, was läuft, und zeigt pro Dienst eine Karte. Inoffiziell, nicht mit evcc oder Pi-hole verbunden.
+
+Dienste:
+* evcc – aktualisieren (apt oder Docker, automatisch erkannt), installieren, Live-Status, Probelauf, Dienst neustarten, Web-Oberfläche öffnen
+* Pi-hole – aktualisieren (pihole -up), Blocklisten erneuern, DNS neustarten, installieren (experimentell), /admin öffnen
+* System (ganzer Pi) – alle Pakete aktualisieren (apt full-upgrade), Pi neustarten
 
 Funktionen:
-* evcc aktualisieren (apt) – mit Versions-Diff vorher/nachher
-* Probelauf (Dry-Run) – zeigt gefahrlos, ob ein Update verfügbar ist
-* Verbindung testen – prüft Host/Port/Benutzer/Passwort in Sekunden
-* evcc neu installieren – richtet das offizielle apt-Repo ein und installiert evcc
-* Wartung: evcc-Dienst neustarten, Pi neustarten, Status/Logs anzeigen und teilen
-* Komplettes System-Upgrade (optional) – aktualisiert ALLE Pakete auf dem Pi, nicht nur evcc (apt full-upgrade)
-* Schnellzugriff auf die evcc-Weboberfläche
+* Auto-Erkennung aller Dienste in einer SSH-Sitzung
+* Backup vor evcc-Update (Config + Datenbank), abschaltbar
+* Mehrere Pi-Profile, schnell umschaltbar
+* Verbindung testen mit grün/rot-Status
 
 Sicherheit & Datenschutz:
 * Zugangsdaten bleiben verschlüsselt auf dem Gerät (Android Keystore)
@@ -16,8 +18,8 @@ Sicherheit & Datenschutz:
 * SSH-Key-Auth als Alternative zum Passwort
 * Keine Konten, keine Werbung, kein Tracking, keine Cloud
 
-Hinweis: Inoffizielles Community-Tool, nicht mit dem evcc-Projekt verbunden. Für die tägliche Lade-Steuerung gibt es die offizielle evcc-App.
+Hinweis: Inoffizielles Community-Tool, nicht mit evcc oder Pi-hole verbunden. Für die tägliche Lade-Steuerung gibt es die offizielle evcc-App.
 
-Haftungsausschluss: Die App führt sudo-Befehle (apt, systemctl, reboot) auf deinem Gerät aus. Nutzung auf eigene Gefahr – keine Haftung für Schäden an System, Daten oder Hardware (MIT-Lizenz, "AS IS").
+Haftungsausschluss: Die App führt sudo-Befehle (apt, pihole, systemctl, reboot) auf deinem Gerät aus. Nutzung auf eigene Gefahr – keine Haftung für Schäden an System, Daten oder Hardware (MIT-Lizenz, "AS IS").
 
 Voraussetzung: ein per SSH erreichbarer Raspberry Pi (oder Debian/Linux-Gerät).

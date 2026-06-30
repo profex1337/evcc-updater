@@ -1,24 +1,31 @@
-# Pi-Tool (inoffiziell) – für evcc
+# Pi-Tool (inoffiziell) — evcc · Pi-hole · System
 
-Schlanke **Android-App** (clean minimal, Hell/Dunkel/System), die
-[evcc](https://evcc.io) auf einem Raspberry Pi **per Knopfdruck via SSH
-aktualisiert** — auf Wunsch auch **den ganzen Pi** (alle Pakete via
-`apt full-upgrade`) — und evcc bei Bedarf **installieren** kann. IP + Pi-Zugang
-eintragen, tippen, fertig. Für mich + Freunde, Verteilung als **APK über GitHub
-Releases**.
+Schlanke **Android-App** (clean minimal, Hell/Dunkel/System), die deine
+**self-hosted Dienste auf dem Raspberry Pi per Knopfdruck via SSH
+aktualisiert und installiert** — und ihre Web-Oberfläche öffnet. „Verbindung
+testen" erkennt automatisch, was läuft, und zeigt pro Dienst eine Karte:
+[evcc](https://evcc.io), **Pi-hole** und das **ganze System** (alle Pakete via
+`apt full-upgrade`). IP + Pi-Zugang eintragen, tippen, fertig. Verteilung als
+**APK über GitHub Releases**.
 
 > ⚠️ Hinweis: Die App führt mit deinem eingegebenen Passwort `sudo`-Befehle
-> (`apt`, `systemctl`, ggf. `docker compose`) auf dem Pi aus. Nutze sie nur für
-> Geräte, die dir gehören.
+> (`apt`, `pihole`, `systemctl`, ggf. `docker compose`) auf dem Pi aus. Nutze
+> sie nur für Geräte, die dir gehören.
 >
-> ℹ️ **Inoffizielles** Community-Tool, nicht mit dem evcc-Projekt verbunden.
+> ℹ️ **Inoffizielles** Community-Tool, nicht mit evcc oder Pi-hole verbunden.
 > Für die tägliche Lade-Steuerung gibt es die
 > [offizielle evcc-App](https://play.google.com/store/apps/details?id=io.evcc.android).
 
 ## Funktionen
 
-- **evcc aktualisieren** per Knopfdruck — erkennt automatisch, ob evcc als
-  **apt-Paket** oder im **Docker-Container** läuft, und nimmt den passenden Weg.
+- **Dienste auto-erkennen** — „Verbindung testen" findet evcc, Pi-hole und das
+  System in *einer* SSH-Sitzung und zeigt pro Dienst eine Karte (Status, Version,
+  Aktualisieren/Installieren, „Oberfläche öffnen").
+- **evcc aktualisieren** — erkennt automatisch, ob evcc als **apt-Paket**
+  oder im **Docker-Container** läuft, und nimmt den passenden Weg.
+- **Pi-hole** — aktualisieren (`pihole -up`), Blocklisten erneuern (`pihole -g`),
+  DNS neustarten, installieren (experimentell), `/admin` öffnen.
+- **System** — alle Pakete aktualisieren (`apt full-upgrade`), Pi neustarten.
 - **Probelauf** (`--dry-run`) — zeigt gefahrlos, ob ein Update verfügbar ist.
 - **Backup vor Update** — sichert vor einem apt-Update automatisch `evcc.yaml` +
   die Datenbank als zeitgestempeltes Archiv auf dem Pi (abschaltbar); schlägt es

@@ -1,13 +1,15 @@
-Pi-Tool is an unofficial tool for evcc: it updates and installs evcc on your Raspberry Pi – or optionally the whole Pi (all packages) – over SSH, with a single tap. Not affiliated with the evcc project.
+Pi-Tool updates and installs self-hosted services on your Raspberry Pi over SSH, with a single tap. "Test connection" auto-detects what's running and shows a card per service. Unofficial, not affiliated with evcc or Pi-hole.
+
+Services:
+* evcc – update (apt or Docker, auto-detected), install, live status, dry-run, restart service, open web UI
+* Pi-hole – update (pihole -up), rebuild blocklists, restart DNS, install (experimental), open /admin
+* System (whole Pi) – update all packages (apt full-upgrade), reboot
 
 Features:
-* Update evcc (apt) with a before/after version diff
-* Dry-run probe – safely check whether an update is available
-* Test connection – verify host/port/user/password in seconds
-* Install evcc – adds the official apt repo and installs evcc
-* Maintenance: restart the evcc service, reboot the Pi, view/share status & logs
-* Full system upgrade (optional) – updates ALL packages on the Pi, not just evcc (apt full-upgrade)
-* Quick link to the evcc web UI
+* Auto-detects all services in one SSH session
+* Backup before the evcc update (config + database), optional
+* Multiple Pi profiles, quick switching
+* Test connection with green/red status
 
 Security & privacy:
 * Credentials stay encrypted on device (Android Keystore)
@@ -16,8 +18,8 @@ Security & privacy:
 * SSH key auth as an alternative to passwords
 * No accounts, no ads, no tracking, no cloud
 
-Note: unofficial community tool, not affiliated with the evcc project. For day-to-day charging control there is the official evcc app.
+Note: unofficial community tool, not affiliated with evcc or Pi-hole. For day-to-day charging control there is the official evcc app.
 
-Disclaimer: the app runs sudo commands (apt, systemctl, reboot) on your device. Use at your own risk – no liability for damage to system, data or hardware (MIT license, "AS IS").
+Disclaimer: the app runs sudo commands (apt, pihole, systemctl, reboot) on your device. Use at your own risk – no liability for damage to system, data or hardware (MIT license, "AS IS").
 
 Requirement: a Raspberry Pi (or Debian/Linux device) reachable over SSH.

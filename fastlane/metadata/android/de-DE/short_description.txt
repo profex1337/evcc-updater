@@ -1,1 +1,1 @@
-evcc – und den ganzen Pi – per SSH aktualisieren & installieren.
+evcc, Pi-hole & den ganzen Pi per SSH aktualisieren/installieren.
