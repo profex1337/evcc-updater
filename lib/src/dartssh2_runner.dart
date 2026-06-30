@@ -80,6 +80,10 @@ class Dartssh2Runner implements SshRunner {
     final client = SSHClient(
       socket,
       username: config.username,
+      // Keep the connection alive during long, quiet phases (e.g. dpkg
+      // unpacking a large package) so a NAT/router doesn't drop the idle TCP
+      // session mid-upgrade.
+      keepAliveInterval: const Duration(seconds: 20),
       // Key auth when a private key is provided; otherwise password auth.
       identities: identities,
       onPasswordRequest: config.usesKeyAuth ? null : () => config.password,
@@ -151,12 +155,16 @@ class Dartssh2Runner implements SshRunner {
     // onDone, which dartssh2 fires only after all channel data is delivered —
     // so no trailing chunk (e.g. a short version string) can be lost. Awaiting
     // the streams (rather than session.done + cancel) is what guarantees this.
+    // Every chunk also refreshes [lastActivity] for the inactivity timeout.
+    var lastActivity = DateTime.now();
     final outSub = session.stdout.listen((data) {
+      lastActivity = DateTime.now();
       final s = utf8.decode(data, allowMalformed: true);
       stdoutBuf.write(s);
       emit(false, s);
     });
     final errSub = session.stderr.listen((data) {
+      lastActivity = DateTime.now();
       final s = utf8.decode(data, allowMalformed: true);
       stderrBuf.write(s);
       emit(true, s);
@@ -167,9 +175,23 @@ class Dartssh2Runner implements SshRunner {
     }
     await session.stdin.close();
 
+    // Inactivity timeout, not a total cap: a multi-minute upgrade that keeps
+    // streaming progress must run to completion, but a command that produces no
+    // output for [commandTimeout] (stalled/dropped connection) aborts.
+    final drained =
+        Future.wait([outSub.asFuture<void>(), errSub.asFuture<void>()]);
+    final idle = Completer<void>();
+    final ticker = Timer.periodic(const Duration(seconds: 5), (t) {
+      if (DateTime.now().difference(lastActivity) >= config.commandTimeout) {
+        t.cancel();
+        if (!idle.isCompleted) {
+          idle.completeError(
+              TimeoutException('keine Ausgabe', config.commandTimeout));
+        }
+      }
+    });
     try {
-      await Future.wait([outSub.asFuture<void>(), errSub.asFuture<void>()])
-          .timeout(config.commandTimeout);
+      await Future.any([drained, idle.future]);
     } on TimeoutException {
       // Deterministic cleanup: cancel the subscriptions, don't rely on close()
       // tearing the streams down promptly.
@@ -177,6 +199,8 @@ class Dartssh2Runner implements SshRunner {
       await errSub.cancel();
       session.close();
       rethrow;
+    } finally {
+      ticker.cancel();
     }
 
     // Flush any trailing partial line (output without a final newline).

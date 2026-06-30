@@ -15,9 +15,11 @@ class SshConfig {
   /// Bounds the TCP connect AND the SSH auth handshake.
   final Duration timeout;
 
-  /// Bounds a single command's execution. Generous, because an `apt-get`
-  /// upgrade can legitimately take a while — but still finite so a stuck
-  /// command (e.g. a held dpkg lock) cannot hang the app forever.
+  /// Max time a command may produce NO output before it's considered stalled.
+  /// This is an *inactivity* timeout, not a total cap: a big `apt-get
+  /// full-upgrade` or `docker pull` streams progress for many minutes and must
+  /// be allowed to finish, but a truly dropped/hung connection (no output at
+  /// all for this long) still aborts. Reset on every stdout/stderr chunk.
   final Duration commandTimeout;
 
   /// Optional PEM private key for SSH auth. When non-empty, the connection
