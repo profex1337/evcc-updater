@@ -31,7 +31,8 @@ android {
         // Published application identity — do not change (would orphan updates).
         applicationId = "de.grasse.evcc_updater"
         minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        // Pinned explicitly: Play requires new apps/updates to target API 35.
+        targetSdk = 35
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }

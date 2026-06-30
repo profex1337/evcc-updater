@@ -53,7 +53,8 @@ Voraussetzungen: ein per SSH erreichbarer Raspberry Pi (oder Linux/Debian-Gerät
 - Tags: evcc, Raspberry Pi, SSH
 - Website: https://profex1337.github.io/evcc-pi-tool/
 - Datenschutz-URL: **https://profex1337.github.io/evcc-pi-tool/privacy.html**
-- Kontakt-E-Mail: *<deine E-Mail in der Console eintragen — wird nicht zwingend öffentlich angezeigt>*
+- Kontakt-E-Mail: **hello@kyth.systems**
+- Impressum-URL: **https://profex1337.github.io/evcc-pi-tool/impressum.html**
 
 ## Data Safety (Formular-Antworten)
 - Werden Daten erfasst/geteilt? **Nein** – nichts wird an uns oder Dritte übertragen.

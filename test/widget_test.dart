@@ -110,6 +110,21 @@ void main() {
     expect(store.saved.profiles.last.name, 'Eltern');
   });
 
+  testWidgets('opens the bundled open-source licenses page', (tester) async {
+    // Extra-tall surface so the footer (bottom of the ListView) is built.
+    tester.view.physicalSize = const Size(1080, 4200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(_page());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Open-Source-Lizenzen'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(LicensePage), findsOneWidget);
+  });
+
   testWidgets('tapping a profile chip switches the active Pi', (tester) async {
     useTallScreen(tester);
     final store = _FakeStore(const AppConfig(

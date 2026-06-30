@@ -31,6 +31,7 @@ const kCard = Color(0xFF161A17);
 const kEvccPlayStoreUrl =
     'https://play.google.com/store/apps/details?id=io.evcc.android';
 const kPrivacyUrl = 'https://profex1337.github.io/evcc-pi-tool/privacy.html';
+const kImpressumUrl = 'https://profex1337.github.io/evcc-pi-tool/impressum.html';
 const kReleasesUrl = 'https://github.com/profex1337/evcc-pi-tool/releases';
 
 /// Drives MaterialApp.themeMode; updated from the loaded setting + the picker.
@@ -1307,6 +1308,21 @@ class _UpdaterPageState extends State<UpdaterPage>
                   onPressed: () => _openUrl(kPrivacyUrl),
                   icon: const Icon(Icons.privacy_tip_outlined, size: 18),
                   label: const Text('Datenschutz'),
+                ),
+                TextButton.icon(
+                  onPressed: () => _openUrl(kImpressumUrl),
+                  icon: const Icon(Icons.info_outline, size: 18),
+                  label: const Text('Impressum'),
+                ),
+                TextButton.icon(
+                  onPressed: () => showLicensePage(
+                    context: context,
+                    applicationName: 'evcc Pi-Tool',
+                    applicationLegalese:
+                        '© 2026 KYTH. Systems UG (haftungsbeschränkt) i.G.',
+                  ),
+                  icon: const Icon(Icons.description_outlined, size: 18),
+                  label: const Text('Open-Source-Lizenzen'),
                 ),
               ],
             ),
