@@ -1,1 +1,1 @@
-evcc auf dem Raspberry Pi per SSH aktualisieren und installieren.
+evcc – und den ganzen Pi – per SSH aktualisieren & installieren.

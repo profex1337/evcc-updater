@@ -1,8 +1,9 @@
-# evcc Pi-Tool
+# Pi-Tool (inoffiziell) – für evcc
 
 Schlanke **Android-App** (clean minimal, Hell/Dunkel/System), die
 [evcc](https://evcc.io) auf einem Raspberry Pi **per Knopfdruck via SSH
-aktualisiert** — und es bei Bedarf auch **installieren** kann. IP + Pi-Zugang
+aktualisiert** — auf Wunsch auch **den ganzen Pi** (alle Pakete via
+`apt full-upgrade`) — und evcc bei Bedarf **installieren** kann. IP + Pi-Zugang
 eintragen, tippen, fertig. Für mich + Freunde, Verteilung als **APK über GitHub
 Releases**.
 

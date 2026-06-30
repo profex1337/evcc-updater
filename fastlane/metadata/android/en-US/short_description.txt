@@ -1,1 +1,1 @@
-Update and install evcc on your Raspberry Pi over SSH, in one tap.
+Update evcc — or the whole Pi — and install evcc over SSH, in one tap.

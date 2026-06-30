@@ -1,4 +1,4 @@
-# Play Store — Listing & Einreichung (evcc Pi-Tool)
+# Play Store — Listing & Einreichung (Pi-Tool)
 
 Alles hier ist vorbereitet. Was nur **du** machen kannst, ist unten unter „Checkliste" markiert.
 
@@ -11,7 +11,7 @@ Alles hier ist vorbereitet. Was nur **du** machen kannst, ist unten unter „Che
 
 **App-Name (max. 30):**
 ```
-evcc Pi-Tool
+Pi-Tool
 ```
 
 **Kurzbeschreibung (max. 80):**
@@ -21,7 +21,7 @@ evcc auf dem Raspberry Pi per SSH aktualisieren und installieren – ein Knopfdr
 
 **Vollbeschreibung (max. 4000):**
 ```
-evcc Pi-Tool aktualisiert und installiert evcc auf deinem Raspberry Pi – bequem per SSH, mit einem Knopfdruck.
+Pi-Tool aktualisiert und installiert evcc auf deinem Raspberry Pi – bequem per SSH, mit einem Knopfdruck.
 
 Funktionen:
 • evcc aktualisieren (apt) – mit Versions-Diff vorher/nachher

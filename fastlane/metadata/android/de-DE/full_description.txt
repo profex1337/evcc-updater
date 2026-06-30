@@ -1,4 +1,4 @@
-evcc Pi-Tool aktualisiert und installiert evcc auf deinem Raspberry Pi – bequem per SSH, mit einem Knopfdruck.
+Pi-Tool ist ein inoffizielles Tool für evcc: Es aktualisiert und installiert evcc auf deinem Raspberry Pi – und auf Wunsch gleich den ganzen Pi (alle Pakete) – bequem per SSH, mit einem Knopfdruck. Nicht mit dem evcc-Projekt verbunden.
 
 Funktionen:
 * evcc aktualisieren (apt) – mit Versions-Diff vorher/nachher
@@ -6,7 +6,7 @@ Funktionen:
 * Verbindung testen – prüft Host/Port/Benutzer/Passwort in Sekunden
 * evcc neu installieren – richtet das offizielle apt-Repo ein und installiert evcc
 * Wartung: evcc-Dienst neustarten, Pi neustarten, Status/Logs anzeigen und teilen
-* Optionales komplettes System-Upgrade
+* Komplettes System-Upgrade (optional) – aktualisiert ALLE Pakete auf dem Pi, nicht nur evcc (apt full-upgrade)
 * Schnellzugriff auf die evcc-Weboberfläche
 
 Sicherheit & Datenschutz:

@@ -5,7 +5,7 @@
     <!-- Optional app lock via biometrics / device credential (local_auth). -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
     <application
-        android:label="evcc Pi-Tool"
+        android:label="Pi-Tool"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false">

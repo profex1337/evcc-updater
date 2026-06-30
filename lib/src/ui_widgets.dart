@@ -349,19 +349,9 @@ class _LockScreen extends StatelessWidget {
           children: [
             const Icon(Icons.bolt, color: kGreen, size: 56),
             const SizedBox(height: 12),
-            const Text.rich(
-              TextSpan(children: [
-                TextSpan(
-                    text: 'evcc ',
-                    style: TextStyle(
-                        fontWeight: FontWeight.w800, color: Colors.white)),
-                TextSpan(
-                    text: 'Pi-Tool',
-                    style: TextStyle(
-                        fontWeight: FontWeight.w800, color: kGreen)),
-              ]),
-              style: TextStyle(fontSize: 22),
-            ),
+            const Text('Pi-Tool',
+                style: TextStyle(
+                    fontSize: 22, fontWeight: FontWeight.w800, color: kGreen)),
             const SizedBox(height: 6),
             const Text('Gesperrt', style: TextStyle(color: Colors.white54)),
             const SizedBox(height: 20),

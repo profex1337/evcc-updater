@@ -70,7 +70,7 @@ class EvccPiToolApp extends StatelessWidget {
     return ValueListenableBuilder<ThemeMode>(
       valueListenable: themeModeNotifier,
       builder: (_, mode, _) => MaterialApp(
-        title: 'evcc Pi-Tool',
+        title: 'Pi-Tool',
         debugShowCheckedModeBanner: false,
         themeMode: mode,
         theme: _buildTheme(Brightness.light),
@@ -378,7 +378,7 @@ class _UpdaterPageState extends State<UpdaterPage>
     if (_unlocking) return; // re-entrancy guard: avoid overlapping prompts
     _unlocking = true;
     try {
-      final ok = await _authenticator.authenticate('evcc Pi-Tool entsperren');
+      final ok = await _authenticator.authenticate('Pi-Tool entsperren');
       if (ok && mounted) setState(() => _locked = false);
     } finally {
       _unlocking = false;
@@ -1076,19 +1076,11 @@ class _UpdaterPageState extends State<UpdaterPage>
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('evcc ',
-                style: TextStyle(
-                    fontWeight: FontWeight.w800, letterSpacing: 0.3)),
-            Text('Pi-Tool',
-                style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 0.3,
-                    color: theme.colorScheme.primary)),
-          ],
-        ),
+        title: Text('Pi-Tool',
+            style: TextStyle(
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.3,
+                color: theme.colorScheme.primary)),
         actions: [
           PopupMenuButton<String>(
             onSelected: (v) {
@@ -1317,7 +1309,7 @@ class _UpdaterPageState extends State<UpdaterPage>
                 TextButton.icon(
                   onPressed: () => showLicensePage(
                     context: context,
-                    applicationName: 'evcc Pi-Tool',
+                    applicationName: 'Pi-Tool (inoffiziell, für evcc)',
                     applicationLegalese:
                         '© 2026 KYTH. Systems UG (haftungsbeschränkt) i.G.',
                   ),
