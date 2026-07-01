@@ -26,6 +26,15 @@ void main() {
       expect(v!.updateAvailable, isTrue);
     });
 
+    test('flags an update when only FTL/Web is behind (not just Core)', () {
+      const out = 'Core version is v6.0.4 (Latest: v6.0.4)\n'
+          'Web version is v6.0.1 (Latest: v6.0.1)\n'
+          'FTL version is v6.0.4 (Latest: v6.0.6)';
+      final v = parsePiholeVersion(out);
+      expect(v!.version, 'v6.0.4'); // Core still drives the shown version
+      expect(v.updateAvailable, isTrue); // …but FTL is behind
+    });
+
     test('keeps a pre-release tag and still flags the update', () {
       final v = parsePiholeVersion('Core version is v6.0.4-beta (Latest: v6.0.5)');
       expect(v!.version, 'v6.0.4-beta');

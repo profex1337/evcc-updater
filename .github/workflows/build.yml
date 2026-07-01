@@ -13,9 +13,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # Only a boolean is job-wide; the actual signing-secret VALUES are scoped
-      # to the single "Configure release signing" step, so third-party actions
-      # never have them in their environment.
+      # Only a boolean is job-wide; the secret VALUES are env-scoped to the
+      # "Configure release signing" step. The materialized keystore +
+      # key.properties FILES are then deleted right after the builds (see the
+      # cleanup step) so the later third-party upload/publish actions can't read
+      # them from the workspace either.
       HAS_KEYSTORE: ${{ secrets.KEYSTORE_BASE64 != '' }}
 
     steps:
@@ -70,19 +72,27 @@ jobs:
       - name: Build release APK (arm64 + armeabi-v7a)
         run: flutter build apk --release --target-platform android-arm64,android-arm
 
+      # Play Store wants an App Bundle (.aab). Built only when signing is
+      # configured; kept as a CI artifact (NOT attached to the public release,
+      # so friends only ever see the installable .apk). Built here — before the
+      # signing material is wiped — so both artifacts exist first.
+      - name: Build release App Bundle (Play Store)
+        if: env.HAS_KEYSTORE == 'true'
+        run: flutter build appbundle --release
+
+      # Delete the keystore + plaintext key.properties from the workspace before
+      # any third-party action runs, so a compromised upload/publish action
+      # can't exfiltrate the release signing key. Runs even if a build failed.
+      - name: Remove signing material before third-party steps
+        if: ${{ always() && env.HAS_KEYSTORE == 'true' }}
+        run: rm -f android/app/upload-keystore.jks android/key.properties
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: evcc-pi-tool-apk
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
-
-      # Play Store wants an App Bundle (.aab). Built only when signing is
-      # configured; kept as a CI artifact (NOT attached to the public release,
-      # so friends only ever see the installable .apk).
-      - name: Build release App Bundle (Play Store)
-        if: env.HAS_KEYSTORE == 'true'
-        run: flutter build appbundle --release
 
       - name: Upload Play Store AAB artifact
         if: env.HAS_KEYSTORE == 'true'

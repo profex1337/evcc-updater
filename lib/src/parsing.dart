@@ -7,13 +7,17 @@ library;
 /// Fixed-length mask used to redact the password from any visible text.
 const String passwordMask = '********';
 
-/// Parses the `dpkg-query` version output.
+/// Parses the `dpkg-query -W -f='${db:Status-Status} ${Version}'` output.
 ///
-/// Returns the trimmed version string, or `null` when the package is not
-/// installed (empty / whitespace-only output).
+/// Returns the version string only when the status word is exactly
+/// `installed`. A removed-but-not-purged package (rc / `config-files` state)
+/// still carries a Version in dpkg's database, so we must NOT treat it as
+/// installed — otherwise the app would offer a no-op update for a removed evcc.
+/// Returns null for any non-installed status or empty output.
 String? parseInstalledVersion(String dpkgOutput) {
-  final trimmed = dpkgOutput.trim();
-  return trimmed.isEmpty ? null : trimmed;
+  final parts = dpkgOutput.trim().split(RegExp(r'\s+'));
+  if (parts.length >= 2 && parts[0] == 'installed') return parts[1];
+  return null;
 }
 
 /// Matches apt's "0 upgraded, 0 newly installed" summary, but only when the

@@ -7,11 +7,11 @@ void main() {
       final steps = buildUpdateSteps(fullUpgrade: false, dryRun: false);
 
       expect(steps.map((s) => s.command).toList(), [
-        r"dpkg-query -W -f='${Version}' evcc",
+        r"dpkg-query -W -f='${db:Status-Status} ${Version}' evcc",
         'LC_ALL=C sudo -S apt-get update -qq',
         'LC_ALL=C sudo -S apt-get install --only-upgrade -y evcc',
         'systemctl is-active evcc',
-        r"dpkg-query -W -f='${Version}' evcc",
+        r"dpkg-query -W -f='${db:Status-Status} ${Version}' evcc",
       ]);
     });
 

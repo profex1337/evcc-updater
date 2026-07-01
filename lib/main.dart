@@ -123,6 +123,9 @@ class _UpdaterPageState extends State<UpdaterPage>
     with WidgetsBindingObserver {
   late final AppConfigStore _store = widget.store ?? AppConfigStore();
   late final EvccUpdater _updater = widget.updater ?? EvccUpdater.real();
+  // Separate updater for the silent on-launch/after-switch detection so it never
+  // shares the foreground action's single cancel handle (_active/_cancelRequested).
+  late final EvccUpdater _autoUpdater = widget.updater ?? EvccUpdater.real();
   late final UpdateChecker _updateChecker =
       widget.updateChecker ?? UpdateChecker();
   late final Authenticator _authenticator =
@@ -152,6 +155,8 @@ class _UpdaterPageState extends State<UpdaterPage>
   String _uiScheme = 'http';
   bool _lockEnabled = false;
   bool _locked = false;
+  bool _booting = true; // true until settings load, so the shell isn't shown
+  bool _autoDetecting = false; // a silent _autoStatus detect is in flight
   bool _unlocking = false;
   String _themeMode = 'system';
   String _channel = 'stable';
@@ -238,6 +243,7 @@ class _UpdaterPageState extends State<UpdaterPage>
       _backupBeforeUpdate = cfg.backupBeforeUpdate;
       _applyProfile(cfg.active);
       if (_lockEnabled) _locked = true;
+      _booting = false; // settings + lock state resolved → reveal the UI
     });
     themeModeNotifier.value = parseThemeMode(_themeMode);
     // Attach auto-save listeners after initial values are set.
@@ -1058,8 +1064,12 @@ class _UpdaterPageState extends State<UpdaterPage>
     // The (bounded) scan still finishes in the background; if the user already
     // cancelled, the dialog is gone — just drop the result.
     if (cancelled) return;
-    navigator.pop(); // dismiss the progress dialog (topmost by construction)
-    if (!mounted) return;
+    // Only pop if our dialog is still the top route: if the app was backgrounded
+    // mid-scan with app-lock on, the lifecycle handler already popUntil'd to the
+    // home route, and a blind pop() would remove the home route (blank screen).
+    if (navigator.canPop()) navigator.pop();
+    // Don't draw the results over the lock screen (or after dispose).
+    if (!mounted || _locked) return;
     if (hosts.isEmpty) {
       _snack('Keine SSH-Geräte im WLAN gefunden – IP bitte manuell eintragen.');
       return;
@@ -1097,16 +1107,21 @@ class _UpdaterPageState extends State<UpdaterPage>
   /// Silent read-only status check on launch (opt-in). Pre-fills the version
   /// badge + status without entering the busy state or clearing the log.
   Future<void> _autoStatus() async {
-    if (_busy || !_autoCheck || _host.text.trim().isEmpty) return;
+    if (_busy || _autoDetecting || !_autoCheck || _host.text.trim().isEmpty) {
+      return;
+    }
     final port = int.tryParse(_port.text.trim());
     if (port == null) return;
     if (_authMode == AuthMode.password && _password.text.isEmpty) return;
     if (_authMode == AuthMode.key && _privateKey.text.trim().isEmpty) return;
     final gen = _detectGen; // invalidated if the user switches Pi mid-detection
+    _autoDetecting = true;
     try {
       // Silent launch check stays password-free: never escalate docker to sudo
       // here (only the explicit "Verbindung herstellen"/an action does that).
-      final services = await _updater.detectServices(
+      // Uses _autoUpdater so it never touches the foreground action's cancel
+      // handle if the user starts an action while this is still in flight.
+      final services = await _autoUpdater.detectServices(
         config: _configFor(port),
         onLog: (_) {},
         allowSudoForDocker: false,
@@ -1119,6 +1134,8 @@ class _UpdaterPageState extends State<UpdaterPage>
       });
     } catch (_) {
       // silent — never disrupt launch
+    } finally {
+      _autoDetecting = false;
     }
   }
 
@@ -1470,6 +1487,14 @@ class _UpdaterPageState extends State<UpdaterPage>
 
   @override
   Widget build(BuildContext context) {
+    // Until settings load we don't yet know if app-lock is on — show a neutral
+    // brand splash rather than flashing the unlocked shell for a few frames.
+    if (_booting) {
+      return const Scaffold(
+        backgroundColor: kBlack,
+        body: Center(child: _PromptMark(size: 64)),
+      );
+    }
     if (_locked) return _LockScreen(onUnlock: _tryUnlock);
 
     final theme = Theme.of(context);

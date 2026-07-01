@@ -133,23 +133,8 @@ class Dartssh2Runner implements SshRunner {
     // never be defeated by a value split across two network chunks — a secret
     // would have to straddle a newline, which it cannot. The full raw output is
     // still captured verbatim in the buffers for the returned result.
-    var outPartial = '';
-    var errPartial = '';
-    void emit(bool isErr, String chunk) {
-      if (onOutput == null) return;
-      var buf = (isErr ? errPartial : outPartial) + chunk;
-      var nl = buf.indexOf('\n');
-      while (nl != -1) {
-        onOutput(buf.substring(0, nl + 1));
-        buf = buf.substring(nl + 1);
-        nl = buf.indexOf('\n');
-      }
-      if (isErr) {
-        errPartial = buf;
-      } else {
-        outPartial = buf;
-      }
-    }
+    final outLines = onOutput == null ? null : LineBuffer(onOutput);
+    final errLines = onOutput == null ? null : LineBuffer(onOutput);
 
     // Drain both streams to completion. asFuture() resolves on the stream's
     // onDone, which dartssh2 fires only after all channel data is delivered —
@@ -161,13 +146,13 @@ class Dartssh2Runner implements SshRunner {
       lastActivity = DateTime.now();
       final s = utf8.decode(data, allowMalformed: true);
       stdoutBuf.write(s);
-      emit(false, s);
+      outLines?.add(s);
     });
     final errSub = session.stderr.listen((data) {
       lastActivity = DateTime.now();
       final s = utf8.decode(data, allowMalformed: true);
       stderrBuf.write(s);
-      emit(true, s);
+      errLines?.add(s);
     });
 
     if (stdin != null) {
@@ -204,10 +189,8 @@ class Dartssh2Runner implements SshRunner {
     }
 
     // Flush any trailing partial line (output without a final newline).
-    if (onOutput != null) {
-      if (outPartial.isNotEmpty) onOutput(outPartial);
-      if (errPartial.isNotEmpty) onOutput(errPartial);
-    }
+    outLines?.flush();
+    errLines?.flush();
 
     return CommandResult(
       exitCode: session.exitCode,
@@ -220,5 +203,37 @@ class Dartssh2Runner implements SshRunner {
   Future<void> close() async {
     _client?.close();
     _client = null;
+  }
+}
+
+/// Buffers streamed output and emits only WHOLE lines to [onLine], holding any
+/// trailing partial line until a newline arrives (or [flush] is called). This
+/// is a security control: a per-line redactor (the sudo-password mask) can't be
+/// defeated by a secret split across two network chunks, because a secret would
+/// have to straddle a newline — which it cannot.
+class LineBuffer {
+  LineBuffer(this.onLine);
+
+  final void Function(String line) onLine;
+  String _partial = '';
+
+  /// Feed a raw chunk; emits every complete line it now contains.
+  void add(String chunk) {
+    var buf = _partial + chunk;
+    var nl = buf.indexOf('\n');
+    while (nl != -1) {
+      onLine(buf.substring(0, nl + 1));
+      buf = buf.substring(nl + 1);
+      nl = buf.indexOf('\n');
+    }
+    _partial = buf;
+  }
+
+  /// Emit any trailing output that had no final newline.
+  void flush() {
+    if (_partial.isNotEmpty) {
+      onLine(_partial);
+      _partial = '';
+    }
   }
 }

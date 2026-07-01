@@ -3,15 +3,19 @@ import 'package:evcc_updater/src/parsing.dart';
 
 void main() {
   group('parseInstalledVersion', () {
-    test('trims trailing newline from dpkg-query output', () {
-      expect(parseInstalledVersion('0.310.0\n'), '0.310.0');
+    test('returns the version when the status is "installed"', () {
+      expect(parseInstalledVersion('installed 0.310.0\n'), '0.310.0');
+      expect(parseInstalledVersion('  installed 0.311.0  '), '0.311.0');
     });
 
-    test('trims surrounding whitespace', () {
-      expect(parseInstalledVersion('  0.311.0  '), '0.311.0');
+    test('null for removed-but-not-purged (config-files / rc) state', () {
+      // dpkg keeps the Version for an rc-state package; it must NOT count as
+      // installed, or the app would offer a no-op update for a removed evcc.
+      expect(parseInstalledVersion('config-files 0.310.0'), isNull);
+      expect(parseInstalledVersion('not-installed '), isNull);
     });
 
-    test('returns null when the package is not installed (empty output)', () {
+    test('null when the package is not installed (empty output)', () {
       expect(parseInstalledVersion(''), isNull);
       expect(parseInstalledVersion('   \n'), isNull);
     });

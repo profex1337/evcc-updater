@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:dartssh2/dartssh2.dart';
 import 'package:evcc_updater/src/dartssh2_runner.dart';
 import 'package:evcc_updater/src/host_key.dart';
+import 'package:evcc_updater/src/parsing.dart';
 import 'package:evcc_updater/src/ssh_runner.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -58,6 +60,56 @@ void main() {
       expect(accepted, isFalse); // aborts the handshake → no password sent
       expect(store.data[id], 'SHA256:old'); // NOT overwritten
       expect(runner.changedFingerprint, 'SHA256:new');
+    });
+  });
+
+  group('LineBuffer (per-line redaction guard)', () {
+    test('holds a partial line until the newline, then emits it whole', () {
+      final lines = <String>[];
+      final lb = LineBuffer(lines.add);
+      lb.add('sek'); // a secret split across two chunks…
+      lb.add('ret\n'); // …only surfaces once the whole line is complete
+      expect(lines, ['sekret\n']);
+    });
+
+    test('a redactor applied per whole line cannot be defeated by a chunk split',
+        () {
+      final out = <String>[];
+      final lb = LineBuffer((line) => out.add(redactPassword(line, 'sekret')));
+      lb.add('pw=sek');
+      lb.add('ret done\n');
+      expect(out, ['pw=$passwordMask done\n']); // masked despite the split
+    });
+
+    test('splits multiple newlines in one chunk and flushes the tail', () {
+      final lines = <String>[];
+      final lb = LineBuffer(lines.add);
+      lb.add('a\nb\nc'); // 'c' has no trailing newline yet
+      expect(lines, ['a\n', 'b\n']);
+      lb.flush();
+      expect(lines, ['a\n', 'b\n', 'c']);
+    });
+  });
+
+  group('Dartssh2Runner.run / connect guards', () {
+    test('run() before connect() throws StateError', () {
+      final runner = Dartssh2Runner(_config, hostKeyStore: FakeHostKeyStore());
+      expect(() => runner.run('echo hi'), throwsStateError);
+    });
+
+    test('connect() with a malformed private key throws SSHKeyDecodeError',
+        () async {
+      const cfg = SshConfig(
+        host: '192.168.178.64',
+        port: 22,
+        username: 'pi',
+        password: 'pw',
+        privateKey: 'not a real pem key',
+      );
+      final runner = Dartssh2Runner(cfg, hostKeyStore: FakeHostKeyStore());
+      // The key is parsed before any socket is opened, so this fails fast with
+      // a clear typed error and never touches the network.
+      await expectLater(runner.connect(), throwsA(isA<SSHKeyDecodeError>()));
     });
   });
 }

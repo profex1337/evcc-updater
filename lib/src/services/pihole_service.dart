@@ -36,22 +36,39 @@ class PiholeVersion {
   });
 }
 
-// Matches both v5 ("Pi-hole version is v5.x (Latest: v5.y)") and
-// v6 ("Core version is v6.x (Latest: v6.y)").
-final _verLine = RegExp(
+// The Core/Pi-hole line drives the DISPLAYED version. Matches v5 ("Pi-hole
+// version is v5.x") and v6 ("Core version is v6.x").
+final _coreLine = RegExp(
     r'(?:Pi-hole|Core) version is (v[\w.\-]+)(?:\s*\(Latest:\s*(v[\w.\-]+)\))?',
     caseSensitive: false);
 
-/// Parses `pihole -v`. Returns null when Pi-hole isn't installed.
+// Any component line (Core / Web / AdminLTE / FTL). An update in ANY of them
+// means `pihole -up` has work to do, so the service isn't "aktuell".
+final _componentLine = RegExp(
+    r'(?:Pi-hole|Core|Web|AdminLTE|FTL) version is (v[\w.\-]+)'
+    r'(?:\s*\(Latest:\s*(v[\w.\-]+)\))?',
+    caseSensitive: false);
+
+/// Parses `pihole -v`. Returns null when Pi-hole isn't installed. Currency
+/// (updateAvailable/latestKnown) considers Core, Web/AdminLTE and FTL, not just
+/// Core — a newer FTL/Web alone still means an update is pending.
 PiholeVersion? parsePiholeVersion(String output) {
-  final m = _verLine.firstMatch(output);
-  if (m == null) return null;
-  final current = m.group(1)!;
-  final latest = m.group(2);
+  final core = _coreLine.firstMatch(output);
+  if (core == null) return null;
+
+  var updateAvailable = false;
+  var latestKnown = false;
+  for (final m in _componentLine.allMatches(output)) {
+    final latest = m.group(2);
+    if (latest != null) {
+      latestKnown = true;
+      if (latest != m.group(1)!) updateAvailable = true;
+    }
+  }
   return PiholeVersion(
-    version: current,
-    updateAvailable: latest != null && latest != current,
-    latestKnown: latest != null,
+    version: core.group(1)!,
+    updateAvailable: updateAvailable,
+    latestKnown: latestKnown,
   );
 }
 

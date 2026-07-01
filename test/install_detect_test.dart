@@ -319,6 +319,19 @@ void main() {
       expect(script, contains("docker start 'evcc'"));
       expect(script, contains('||'));
     });
+
+    test('rolls back when the new container is accepted but then crashes', () {
+      final script = dockerRunRecreateScript(
+        name: 'evcc',
+        image: 'evcc/evcc:latest',
+        runCommand: "docker run -d --name 'evcc' 'evcc/evcc:latest'",
+      );
+      // `docker run -d` returns 0 on accept, so verify it is actually Running…
+      expect(script, contains("docker inspect -f '{{.State.Running}}' 'evcc'"));
+      // …and if not, restore the retained old container and fail.
+      expect(script, contains("docker rename 'evcc-evccpitool-old' 'evcc'"));
+      expect(script, contains('exit 1'));
+    });
   });
 
   group('parseBackupList', () {

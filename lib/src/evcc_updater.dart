@@ -388,8 +388,10 @@ class EvccUpdater {
             version: aptV,
             active: active,
             // We know currency from the apt simulation (best-effort: depends on
-            // the local package index being reasonably fresh).
-            updateAvailable: aptUpgrades.contains('evcc'),
+            // the local package index being reasonably fresh). Match arch-
+            // qualified names too (multiarch prints e.g. "Inst evcc:arm64").
+            updateAvailable:
+                aptUpgrades.any((p) => p == 'evcc' || p.startsWith('evcc:')),
             updateKnown: aptKnown,
             detail: 'apt · Dienst ${active ? 'aktiv' : 'inaktiv'}',
           ));
@@ -930,7 +932,18 @@ class EvccUpdater {
             sudo: true,
             script: buildRestoreScript(path),
             failMsg: 'Wiederherstellung fehlgeschlagen');
-        log('Backup wiederhergestellt – evcc neu gestartet.');
+        // `systemctl start` returns 0 as soon as the process forks, so verify
+        // evcc actually stayed up (a restored config that crashes on start must
+        // not be reported as a clean restore).
+        final svc = await runner.run(serviceStatus);
+        if (!isServiceActive(svc.stdout)) {
+          throw const EvccUpdateException(
+            UpdateErrorKind.serviceInactive,
+            'Backup eingespielt, aber evcc läuft danach nicht (siehe Log) – '
+            'evtl. eine defekte Konfiguration im Backup.',
+          );
+        }
+        log('Backup wiederhergestellt – evcc läuft.');
       },
     );
   }
@@ -994,6 +1007,8 @@ class EvccUpdater {
         log('Starte den Pi neu …');
         log('\$ $rebootCommand');
         var combined = '';
+        int? exitCode;
+        var disconnected = false;
         try {
           final result = await runner.run(
             rebootCommand,
@@ -1004,13 +1019,24 @@ class EvccUpdater {
             },
           );
           combined = '${result.stdout}\n${result.stderr}';
+          exitCode = result.exitCode;
         } catch (_) {
           // The reboot drops the SSH connection — expected, treat as success.
+          disconnected = true;
         }
         if (isSudoPasswordFailure(combined)) {
           throw const EvccUpdateException(
             UpdateErrorKind.sudo,
             'sudo hat das Passwort abgelehnt – stimmt das Pi-Passwort?',
+          );
+        }
+        // A real reboot either drops the connection (caught above) or returns
+        // exit 0. A non-zero exit WITHOUT a disconnect (e.g. sudoers forbids
+        // `reboot`) means the Pi did not reboot — surface it, don't fake success.
+        if (!disconnected && exitCode != null && exitCode != 0) {
+          throw EvccUpdateException(
+            UpdateErrorKind.unknown,
+            'Neustart fehlgeschlagen (Exit $exitCode). Details im Log.',
           );
         }
         log('Neustart ausgelöst – der Pi ist gleich kurz offline.');
@@ -1056,6 +1082,13 @@ class EvccUpdater {
     try {
       log('Verbinde mit ${config.username}@${config.host}:${config.port} …');
       await runner.connect();
+      // A cancel that arrived during the connect handshake must stop here —
+      // before the (possibly destructive) body runs — since closing a not-yet-
+      // established connection can't abort the handshake itself.
+      if (_cancelRequested) {
+        throw const EvccUpdateException(
+            UpdateErrorKind.cancelled, 'Abgebrochen.');
+      }
       final result = await body(runner, log);
       // Closing the connection mid-command doesn't always make run() throw —
       // dartssh2 ends the channel stream normally, so a single-command action

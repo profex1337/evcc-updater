@@ -33,7 +33,8 @@ class SshStep {
 enum InstallKind { apt, docker, unknown }
 
 /// Reads the installed version of the `evcc` package (no sudo needed).
-const String versionQuery = r"dpkg-query -W -f='${Version}' evcc";
+const String versionQuery =
+    r"dpkg-query -W -f='${db:Status-Status} ${Version}' evcc";
 
 /// Lists running containers as `name|image` lines (no sudo).
 const String dockerListCommand = "docker ps --format '{{.Names}}|{{.Image}}'";
@@ -365,7 +366,9 @@ String dockerRunRecreateScript({
   // old container as a rollback by renaming it (never `-v`, so no data loss),
   // create the new one, and if creation fails restore + restart the old one and
   // report failure. A short settle lets an immediately-crashing new container
-  // drop out of `docker ps` before the caller verifies it.
+  // drop out of `docker ps`. `docker run -d` returns 0 the moment the daemon
+  // ACCEPTS the container, so we then verify it is actually still running and,
+  // if not (crash-on-boot), roll back to the retained old container.
   return '''
 set -e
 docker pull $img
@@ -374,6 +377,13 @@ docker stop $n
 docker rename $n $backup
 $runCommand || { echo 'Neuanlage fehlgeschlagen – stelle alten Container wieder her.'; docker rm -f $n >/dev/null 2>&1 || true; docker rename $backup $n && docker start $n; exit 1; }
 sleep 3
+if [ "\$(docker inspect -f '{{.State.Running}}' $n 2>/dev/null)" != "true" ]; then
+  echo 'Neuer Container läuft nach dem Start nicht – stelle den alten wieder her.'
+  docker rm -f $n >/dev/null 2>&1 || true
+  docker rename $backup $n >/dev/null 2>&1 || true
+  docker start $n >/dev/null 2>&1 || true
+  exit 1
+fi
 ''';
 }
 

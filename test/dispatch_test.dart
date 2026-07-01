@@ -437,6 +437,24 @@ void main() {
         '/var/backups/evcc/evcc-backup-20260630-120000.tar.gz');
   });
 
+  testWidgets('keep-alive is released (end) even when the action fails',
+      (tester) async {
+    useTallScreen(tester);
+    final ka = _FakeKeepAlive();
+    final u = FakeEvccUpdater()
+      ..backupError =
+          const EvccUpdateException(UpdateErrorKind.unknown, 'backup boom');
+    await tester.pumpWidget(page(u, keepAlive: ka));
+    await tester.pumpAndSettle();
+    await detect(tester);
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Aktualisieren'));
+    await tester.pumpAndSettle();
+
+    expect(ka.beginCount, 1);
+    expect(ka.endCount, 1); // foreground service released despite the failure
+  });
+
   testWidgets('a dry-run (Probelauf) does NOT start the keep-alive',
       (tester) async {
     useTallScreen(tester);

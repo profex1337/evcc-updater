@@ -12,7 +12,7 @@ import 'package:evcc_updater/src/ssh_runner.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 // Exact command strings the updater is expected to run (see commands.dart).
-const _vQuery = r"dpkg-query -W -f='${Version}' evcc";
+const _vQuery = r"dpkg-query -W -f='${db:Status-Status} ${Version}' evcc";
 const _aptUpdate = 'LC_ALL=C sudo -S apt-get update -qq';
 const _aptUpgrade = 'LC_ALL=C sudo -S apt-get install --only-upgrade -y evcc';
 const _aptDryRun =
@@ -117,8 +117,34 @@ class _HangingRunner implements SshRunner {
   }
 }
 
+/// A runner whose connect() hangs until close() is called — models a cancel
+/// arriving DURING the connect handshake.
+class _ConnectHangRunner implements SshRunner {
+  final connectStarted = Completer<void>();
+  final _connectGate = Completer<void>();
+  bool bodyRan = false;
+
+  @override
+  Future<void> connect() {
+    if (!connectStarted.isCompleted) connectStarted.complete();
+    return _connectGate.future;
+  }
+
+  @override
+  Future<CommandResult> run(String command,
+      {String? stdin, void Function(String chunk)? onOutput}) async {
+    bodyRan = true;
+    return const CommandResult(exitCode: 0, stdout: '', stderr: '');
+  }
+
+  @override
+  Future<void> close() async {
+    if (!_connectGate.isCompleted) _connectGate.complete();
+  }
+}
+
 FakeSshRunner _happyRunner() => FakeSshRunner({
-      _vQuery: [_r('0.310.0\n'), _r('0.311.0\n')],
+      _vQuery: [_r('installed 0.310.0\n'), _r('installed 0.311.0\n')],
       _aptUpdate: [_r('')],
       _aptUpgrade: [
         _r('Setting up evcc (0.311.0) ...\n'
@@ -149,7 +175,7 @@ void main() {
 
     test('real run without a newer version reports already current', () async {
       final runner = FakeSshRunner({
-        _vQuery: [_r('0.310.0\n'), _r('0.310.0\n')],
+        _vQuery: [_r('installed 0.310.0\n'), _r('installed 0.310.0\n')],
         _aptUpdate: [_r('')],
         _aptUpgrade: [
           _r('evcc is already the newest version (0.310.0).\n'
@@ -172,7 +198,7 @@ void main() {
         () async {
       const fullCmd = 'LC_ALL=C sudo -S apt-get full-upgrade -y';
       final runner = FakeSshRunner({
-        _vQuery: [_r('0.310.0\n'), _r('0.310.0\n')],
+        _vQuery: [_r('installed 0.310.0\n'), _r('installed 0.310.0\n')],
         _aptUpdate: [_r('')],
         fullCmd: [
           _r('The following packages will be upgraded:\n  libfoo libbar\n'
@@ -195,7 +221,7 @@ void main() {
 
     test('dry-run uses the --dry-run command and reports a probe', () async {
       final runner = FakeSshRunner({
-        _vQuery: [_r('0.310.0\n')],
+        _vQuery: [_r('installed 0.310.0\n')],
         _aptUpdate: [_r('')],
         _aptDryRun: [
           _r('Inst evcc [0.310.0] (0.311.0 ...)\n'
@@ -238,7 +264,7 @@ void main() {
     test('redacts the password if it ever surfaces in command output',
         () async {
       final runner = FakeSshRunner({
-        _vQuery: [_r('0.310.0\n'), _r('0.310.0\n')],
+        _vQuery: [_r('installed 0.310.0\n'), _r('installed 0.310.0\n')],
         _aptUpdate: [_r('', stderr: 'oops leaked sekret here')],
         _aptUpgrade: [
           _r('evcc is already the newest version (0.310.0).\n'
@@ -267,7 +293,7 @@ void main() {
         () async {
       final runner = FakeSshRunner({
         installCmd: [_r('Setting up evcc ...', exitCode: 0)],
-        _vQuery: [_r('0.310.0\n')],
+        _vQuery: [_r('installed 0.310.0\n')],
         _svc: [_r('active\n')],
       });
 
@@ -334,7 +360,7 @@ void main() {
 
     test('detects a rejected sudo password and still cleans up', () async {
       final runner = FakeSshRunner({
-        _vQuery: [_r('0.310.0\n')],
+        _vQuery: [_r('installed 0.310.0\n')],
         _aptUpdate: [
           _r('', stderr: 'sudo: 1 incorrect password attempt', exitCode: 1)
         ],
@@ -354,7 +380,7 @@ void main() {
       // i==1 (apt-get update) may exit non-zero on a flaky third-party repo;
       // that must not abort an otherwise-fine evcc upgrade (only i==2 is gated).
       final runner = FakeSshRunner({
-        _vQuery: [_r('0.310.0\n'), _r('0.311.0\n')],
+        _vQuery: [_r('installed 0.310.0\n'), _r('installed 0.311.0\n')],
         _aptUpdate: [
           _r('', stderr: 'Failed to fetch http://other.repo', exitCode: 100)
         ],
@@ -371,7 +397,7 @@ void main() {
     test('a non-zero apt step is a hard error, not a false "already current"',
         () async {
       final runner = FakeSshRunner({
-        _vQuery: [_r('0.310.0\n'), _r('0.310.0\n')],
+        _vQuery: [_r('installed 0.310.0\n'), _r('installed 0.310.0\n')],
         _aptUpdate: [_r('')],
         _aptUpgrade: [
           _r('E: Could not get lock /var/lib/dpkg/lock-frontend', exitCode: 100)
@@ -389,7 +415,7 @@ void main() {
 
     test('fails when the service is not active after a real upgrade', () async {
       final runner = FakeSshRunner({
-        _vQuery: [_r('0.310.0\n'), _r('0.311.0\n')],
+        _vQuery: [_r('installed 0.310.0\n'), _r('installed 0.311.0\n')],
         _aptUpdate: [_r('')],
         _aptUpgrade: [_r('1 upgraded, 0 newly installed')],
         _svc: [_r('inactive\n', exitCode: 3)],
@@ -592,16 +618,33 @@ void main() {
       expect(list.length, 2);
     });
 
-    test('restoreBackup runs the restore as root with the chosen archive',
+    test('restoreBackup runs the restore as root and verifies evcc is active',
         () async {
       const path = '/var/backups/evcc/evcc-backup-20260630-120000.tar.gz';
-      final runner = FakeSshRunner({installShellCommand: [_r('Wiederhergestellt.')]});
+      final runner = FakeSshRunner({
+        installShellCommand: [_r('Wiederhergestellt.')],
+        _svc: [_r('active\n')],
+      });
       await _updaterWith(runner)
           .restoreBackup(config: _config, path: path, onLog: (_) {});
       final stdin = runner.stdinByCommand[installShellCommand]!;
       expect(stdin, startsWith('sekret\n'));
       expect(stdin, contains("tar -xzf '$path' -C /"));
       expect(stdin, contains('systemctl start evcc'));
+    });
+
+    test('restoreBackup fails when evcc is not active after the restore',
+        () async {
+      const path = '/var/backups/evcc/evcc-backup-20260630-120000.tar.gz';
+      final runner = FakeSshRunner({
+        installShellCommand: [_r('Wiederhergestellt.')],
+        _svc: [_r('inactive\n')], // restored config crashes evcc on start
+      });
+      await expectLater(
+        _updaterWith(runner).restoreBackup(config: _config, path: path, onLog: (_) {}),
+        throwsA(isA<EvccUpdateException>()
+            .having((e) => e.kind, 'kind', UpdateErrorKind.serviceInactive)),
+      );
     });
 
     test('restoreBackup rejects a path outside the backup dir', () async {
@@ -612,6 +655,27 @@ void main() {
         throwsA(isA<EvccUpdateException>()),
       );
       expect(runner.commandsRun, isEmpty); // never connected/ran anything
+    });
+  });
+
+  group('EvccUpdater.reboot', () {
+    test('reports failure on a non-zero, non-password exit', () async {
+      final runner = FakeSshRunner({
+        rebootCommand: [
+          _r('', stderr: 'reboot: Operation not permitted', exitCode: 1)
+        ],
+      });
+      await expectLater(
+        _updaterWith(runner).reboot(config: _config, onLog: (_) {}),
+        throwsA(isA<EvccUpdateException>()),
+      );
+    });
+
+    test('treats a dropped connection as success', () async {
+      final runner = FakeSshRunner({},
+          runErrors: {rebootCommand: const SocketException('closed')});
+      // A real reboot drops the SSH connection — must NOT be reported as an error.
+      await _updaterWith(runner).reboot(config: _config, onLog: (_) {});
     });
   });
 
@@ -628,6 +692,21 @@ void main() {
             .having((e) => e.kind, 'kind', UpdateErrorKind.cancelled)),
       );
       expect(runner.closed, isTrue);
+    });
+
+    test('cancel during connect stops before the (destructive) body runs',
+        () async {
+      final runner = _ConnectHangRunner();
+      final updater = EvccUpdater(runnerFactory: (_) => runner);
+      final f = updater.upgradeSystem(config: _config, onLog: (_) {});
+      await runner.connectStarted.future;
+      await updater.cancel(); // flag + close() completes the connect handshake
+      await expectLater(
+        f,
+        throwsA(isA<EvccUpdateException>()
+            .having((e) => e.kind, 'kind', UpdateErrorKind.cancelled)),
+      );
+      expect(runner.bodyRan, isFalse); // the action never executed on the Pi
     });
 
     test('a single-command action reports cancelled, not false success',
@@ -650,7 +729,7 @@ void main() {
   group('EvccUpdater.detectServices', () {
     test('detects evcc(apt) + Pi-hole + System in one pass', () async {
       final runner = FakeSshRunner({
-        _vQuery: [_r('0.310.0\n')],
+        _vQuery: [_r('installed 0.310.0\n')],
         _svc: [_r('active\n')],
         piholeVersionCommand: [_r('Core version is v6.0.4 (Latest: v6.1.0)')],
         piholeStatusCommand: [_r('[✓] Pi-hole blocking is enabled')],
@@ -677,7 +756,7 @@ void main() {
     test('evcc(apt) shows an update when the apt sim would upgrade it',
         () async {
       final runner = FakeSshRunner({
-        _vQuery: [_r('0.310.0\n')],
+        _vQuery: [_r('installed 0.310.0\n')],
         _svc: [_r('active\n')],
         systemPendingCommand: [
           _r('Inst evcc [0.310.0] (0.311.0 evcc:armhf [armhf])\n'
@@ -695,9 +774,68 @@ void main() {
       expect(evcc.updateAvailable, isTrue);
     });
 
+    test('evcc(apt) update detected even when apt arch-qualifies the name',
+        () async {
+      final runner = FakeSshRunner({
+        _vQuery: [_r('installed 0.310.0\n')],
+        _svc: [_r('active\n')],
+        systemPendingCommand: [
+          _r('Inst evcc:arm64 [0.310.0] (0.311.0 evcc:arm64 [arm64])\n'
+              '1 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.')
+        ],
+        piholeVersionCommand: [_r('')],
+        systemOsCommand: [_r('PRETTY_NAME="Debian GNU/Linux 12"')],
+      });
+      final list =
+          await _updaterWith(runner).detectServices(config: _config, onLog: (_) {});
+      expect(list.firstWhere((s) => s.id == 'evcc').updateAvailable, isTrue);
+    });
+
+    test('a failed apt simulation leaves evcc + System updateKnown=false',
+        () async {
+      // Broken/locked apt: no "N upgraded" summary + non-zero exit. The app must
+      // NOT claim "Aktuell" — updateKnown stays false so it keeps offering it.
+      final runner = FakeSshRunner({
+        _vQuery: [_r('installed 0.310.0\n')],
+        _svc: [_r('active\n')],
+        systemPendingCommand: [
+          _r('', stderr: 'E: Could not get lock /var/lib/dpkg/lock', exitCode: 100)
+        ],
+        piholeVersionCommand: [_r('')],
+        systemOsCommand: [_r('PRETTY_NAME="Debian"')],
+      });
+      final list =
+          await _updaterWith(runner).detectServices(config: _config, onLog: (_) {});
+      final byId = {for (final s in list) s.id: s};
+      expect(byId['evcc']!.updateKnown, isFalse);
+      expect(byId['evcc']!.updateAvailable, isFalse);
+      expect(byId['system']!.updateKnown, isFalse);
+    });
+
+    test('a connection timeout maps to a connection error', () async {
+      final runner = FakeSshRunner({}, connectError: TimeoutException('x'));
+      await expectLater(
+        _updaterWith(runner).detectServices(config: _config, onLog: (_) {}),
+        throwsA(isA<EvccUpdateException>()
+            .having((e) => e.kind, 'kind', UpdateErrorKind.connection)),
+      );
+    });
+
+    test('a generic SSHError maps to unknown with an "SSH-Fehler" message',
+        () async {
+      final runner = FakeSshRunner({},
+          runErrors: {dockerListCommand: SSHStateError('boom')});
+      await expectLater(
+        _updaterWith(runner).detectServices(config: _config, onLog: (_) {}),
+        throwsA(isA<EvccUpdateException>()
+            .having((e) => e.kind, 'kind', UpdateErrorKind.unknown)
+            .having((e) => e.message, 'message', contains('SSH-Fehler'))),
+      );
+    });
+
     test('Pi-hole reported absent when not installed', () async {
       final runner = FakeSshRunner({
-        _vQuery: [_r('0.310.0\n')],
+        _vQuery: [_r('installed 0.310.0\n')],
         _svc: [_r('active\n')],
         piholeVersionCommand: [_r('')],
         systemOsCommand: [_r('PRETTY_NAME="Raspbian"')],
@@ -712,7 +850,7 @@ void main() {
 
     test('detects a Home Assistant container from docker ps', () async {
       final runner = FakeSshRunner({
-        _vQuery: [_r('0.310.0\n')],
+        _vQuery: [_r('installed 0.310.0\n')],
         _svc: [_r('active\n')],
         dockerListCommand: [
           _r('homeassistant|ghcr.io/home-assistant/home-assistant:stable\n')
@@ -880,7 +1018,7 @@ void main() {
   group('EvccUpdater.detectInstall', () {
     test('apt: a dpkg version means an apt install + service state', () async {
       final runner = FakeSshRunner({
-        _vQuery: [_r('0.310.0\n')],
+        _vQuery: [_r('installed 0.310.0\n')],
         _svc: [_r('active\n')],
       });
 
@@ -927,6 +1065,17 @@ void main() {
       expect(d.kind, InstallKind.docker);
       expect(d.dockerNeedsSudo, isTrue);
       expect(runner.stdinByCommand[dockerListSudoCommand], 'sekret\n');
+    });
+
+    test('rc-state (removed, not purged) evcc is not treated as apt-installed',
+        () async {
+      final runner = FakeSshRunner({
+        _vQuery: [_r('config-files 0.310.0\n')], // Version present, but removed
+        dockerListCommand: [_r('')],
+      });
+      final d =
+          await _updaterWith(runner).detectInstall(config: _config, onLog: (_) {});
+      expect(d.kind, InstallKind.unknown);
     });
 
     test('unknown: neither apt package nor docker container', () async {
